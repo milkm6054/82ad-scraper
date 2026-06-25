@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model TrackedServer {
+  id            String          @id @default(cuid())
+  name          String
+  baseUrl       String          @unique
+  lastCheckedAt DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  games         ProcessedGame[]
+
+  @@map("TrackedServer")
+}
+
+model ProcessedGame {
+  id              String           @id @default(cuid())
+  serverId        String
+  externalGameId  String
+  gameLink        String
+  mapName         String?
+  durationSeconds Int?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  scannedAt       DateTime         @default(now())
+  createdAt       DateTime         @default(now())
+  server          TrackedServer    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  sightings       PlayerSighting[]
+
+  @@unique([serverId, externalGameId])
+  @@index([serverId, scannedAt])
+  @@map("ProcessedGame")
+}
+
+model SpottedPlayer {
+  id            String           @id @default(cuid())
+  steamId64     String           @unique
+  name          String
+  hllRecordsUrl String
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  sightings     PlayerSighting[]
+
+  @@map("SpottedPlayer")
+}
+
+model PlayerSighting {
+  id                  String        @id @default(cuid())
+  spottedPlayerId     String
+  processedGameId     String
+  kills               Int
+  kpm                 Float
+  allowedKills        Int
+  allowedKillPercent  Float
+  killsByType         Json
+  weapons             Json?
+  createdAt           DateTime      @default(now())
+  spottedPlayer       SpottedPlayer @relation(fields: [spottedPlayerId], references: [id], onDelete: Cascade)
+  processedGame       ProcessedGame @relation(fields: [processedGameId], references: [id], onDelete: Cascade)
+
+  @@unique([spottedPlayerId, processedGameId])
+  @@index([processedGameId])
+  @@index([spottedPlayerId])
+  @@map("PlayerSighting")
+}
