@@ -258,7 +258,7 @@ export function TalentDashboard() {
       <section className="surface-strong p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cyan-400">82AD Talent Spotter</p>
+            <p className="muted text-xs font-semibold uppercase tracking-[0.28em]">82AD Talent Spotter</p>
             <h1 className="mt-3 text-3xl font-semibold tracking-tight">CRCON match scanner</h1>
             <p className="mt-2 max-w-3xl text-sm muted">
               Tracks public CRCON game pages and stores players with more than 40 kills, KPM over 1.00, and at least
@@ -287,7 +287,7 @@ export function TalentDashboard() {
       </section>
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      {notice ? <p className="text-sm text-emerald-300">{notice}</p> : null}
+      {notice ? <p className="status-text text-sm">{notice}</p> : null}
 
       <section className="grid gap-4 lg:grid-cols-2">
         <form onSubmit={addServer} className="surface p-4">
@@ -342,7 +342,7 @@ export function TalentDashboard() {
             <div key={server.id} className="surface flex flex-wrap items-center justify-between gap-3 p-3">
               <div>
                 <p className="font-semibold">{server.name}</p>
-                <a className="text-sm text-cyan-300 underline underline-offset-4" href={server.baseUrl} target="_blank" rel="noreferrer">
+                <a className="subtle-link text-sm underline underline-offset-4" href={server.baseUrl} target="_blank" rel="noreferrer">
                   {server.baseUrl}
                 </a>
                 <p className="muted mt-1 text-xs">
@@ -367,7 +367,7 @@ export function TalentDashboard() {
         <h2 className="text-lg font-semibold">Spotted players</h2>
         <div className="table-wrap mt-4">
           <table className="w-full border-collapse text-left text-sm">
-            <thead className="bg-white/5 muted">
+            <thead className="table-head muted">
               <tr>
                 <th className="px-4 py-3">Player</th>
                 <th className="px-4 py-3">Steam ID</th>
@@ -386,14 +386,14 @@ export function TalentDashboard() {
 
                 return (
                   <Fragment key={player.id}>
-                    <tr className="border-t border-white/10">
-                      <td className="px-4 py-3 font-semibold text-emerald-300">{player.name}</td>
+                    <tr className="table-row">
+                      <td className="status-text px-4 py-3 font-semibold">{player.name}</td>
                       <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{bestKpm.toFixed(2)}</td>
                       <td className="px-4 py-3">{bestKills}</td>
                       <td className="px-4 py-3">
-                        <a className="text-cyan-300 underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
+                        <a className="subtle-link underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
                           HLLRecords
                         </a>
                       </td>
@@ -404,7 +404,7 @@ export function TalentDashboard() {
                       </td>
                     </tr>
                     {expanded ? (
-                      <tr className="border-t border-white/10 bg-white/[0.03]">
+                      <tr className="table-row row-muted">
                         <td colSpan={7} className="px-4 py-4">
                           <div className="grid gap-3">
                             {player.sightings.map((sighting) => (
@@ -419,7 +419,7 @@ export function TalentDashboard() {
                                       {formatDateTime(sighting.game.startedAt)}
                                     </p>
                                   </div>
-                                  <a className="text-cyan-300 underline underline-offset-4" href={sighting.game.gameLink} target="_blank" rel="noreferrer">
+                                  <a className="subtle-link underline underline-offset-4" href={sighting.game.gameLink} target="_blank" rel="noreferrer">
                                     Game link
                                   </a>
                                 </div>
