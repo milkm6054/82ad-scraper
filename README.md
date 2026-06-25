@@ -28,11 +28,13 @@ npm run dev
 1. Use the same Railway Postgres database as HCA-Roster, or a database containing the HCA `Player` and `RosterEntry` tables.
 2. Set `DATABASE_URL` on the app service.
 3. Deploy this repo.
-4. Use the start command:
+4. Use the default start command, or set Railway's start command to:
 
 ```bash
-npm run start:prod
+npm start
 ```
+
+`npm start` runs `prisma migrate deploy` before starting Next.js, so the app tables are created in the shared database.
 
 ## Useful Test URLs
 

@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
-    "start:prod": "prisma migrate deploy && next start -H 0.0.0.0 -p ${PORT:-3000}",
+    "start": "prisma migrate deploy && next start -H 0.0.0.0 -p ${PORT:-3000}",
+    "start:next": "next start -H 0.0.0.0 -p ${PORT:-3000}",
+    "start:prod": "npm run start",
     "lint": "eslint",
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy"
