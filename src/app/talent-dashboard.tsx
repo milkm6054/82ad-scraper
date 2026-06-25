@@ -41,6 +41,9 @@ type DashboardResponse = {
   players: PlayerRow[];
 };
 
+type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills";
+type SortDirection = "asc" | "desc";
+
 async function parseResponse<T>(response: Response): Promise<T & { error?: string }> {
   const text = await response.text();
   if (!text.trim()) {
@@ -88,6 +91,22 @@ function formatJsonMap(value: Record<string, number>) {
     .join(", ");
 }
 
+function getBestKpm(player: PlayerRow) {
+  return Math.max(...player.sightings.map((sighting) => sighting.kpm));
+}
+
+function getBestKills(player: PlayerRow) {
+  return Math.max(...player.sightings.map((sighting) => sighting.kills));
+}
+
+function getSortLabel(key: PlayerSortKey, activeKey: PlayerSortKey, direction: SortDirection) {
+  if (key !== activeKey) {
+    return "";
+  }
+
+  return direction === "asc" ? " asc" : " desc";
+}
+
 export function TalentDashboard() {
   const [data, setData] = useState<DashboardResponse>({ servers: [], players: [] });
   const [serverName, setServerName] = useState("");
@@ -99,6 +118,8 @@ export function TalentDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [playerSortKey, setPlayerSortKey] = useState<PlayerSortKey>("timesSpotted");
+  const [playerSortDirection, setPlayerSortDirection] = useState<SortDirection>("desc");
 
   const loadDashboard = useCallback(async () => {
     const response = await fetch("/api/dashboard", { cache: "no-store" });
@@ -146,6 +167,34 @@ export function TalentDashboard() {
       games: data.servers.reduce((total, server) => total + server.processedGames, 0),
     };
   }, [data]);
+
+  const sortedPlayers = useMemo(() => {
+    return [...data.players].sort((left, right) => {
+      if (playerSortKey === "name") {
+        const comparison = left.name.localeCompare(right.name);
+        return playerSortDirection === "asc" ? comparison : -comparison;
+      }
+
+      const leftValue =
+        playerSortKey === "timesSpotted"
+          ? left.timesSpotted
+          : playerSortKey === "bestKpm"
+            ? getBestKpm(left)
+            : getBestKills(left);
+      const rightValue =
+        playerSortKey === "timesSpotted"
+          ? right.timesSpotted
+          : playerSortKey === "bestKpm"
+            ? getBestKpm(right)
+            : getBestKills(right);
+
+      if (leftValue !== rightValue) {
+        return playerSortDirection === "asc" ? leftValue - rightValue : rightValue - leftValue;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
+  }, [data.players, playerSortDirection, playerSortKey]);
 
   async function addServer(event: React.FormEvent) {
     event.preventDefault();
@@ -251,6 +300,16 @@ export function TalentDashboard() {
       }
       return next;
     });
+  }
+
+  function updatePlayerSort(key: PlayerSortKey) {
+    if (playerSortKey === key) {
+      setPlayerSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+
+    setPlayerSortKey(key);
+    setPlayerSortDirection(key === "name" ? "asc" : "desc");
   }
 
   return (
@@ -369,20 +428,36 @@ export function TalentDashboard() {
           <table className="w-full border-collapse text-left text-sm">
             <thead className="table-head muted">
               <tr>
-                <th className="px-4 py-3">Player</th>
+                <th className="px-4 py-3">
+                  <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updatePlayerSort("name")}>
+                    Player{getSortLabel("name", playerSortKey, playerSortDirection)}
+                  </button>
+                </th>
                 <th className="px-4 py-3">Steam ID</th>
-                <th className="px-4 py-3">Times spotted</th>
-                <th className="px-4 py-3">Best KPM</th>
-                <th className="px-4 py-3">Best kills</th>
+                <th className="px-4 py-3">
+                  <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updatePlayerSort("timesSpotted")}>
+                    Times spotted{getSortLabel("timesSpotted", playerSortKey, playerSortDirection)}
+                  </button>
+                </th>
+                <th className="px-4 py-3">
+                  <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updatePlayerSort("bestKpm")}>
+                    Best KPM{getSortLabel("bestKpm", playerSortKey, playerSortDirection)}
+                  </button>
+                </th>
+                <th className="px-4 py-3">
+                  <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updatePlayerSort("bestKills")}>
+                    Best kills{getSortLabel("bestKills", playerSortKey, playerSortDirection)}
+                  </button>
+                </th>
                 <th className="px-4 py-3">Profile</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
-              {data.players.map((player) => {
+              {sortedPlayers.map((player) => {
                 const expanded = expandedPlayerIds.has(player.id);
-                const bestKpm = Math.max(...player.sightings.map((sighting) => sighting.kpm));
-                const bestKills = Math.max(...player.sightings.map((sighting) => sighting.kills));
+                const bestKpm = getBestKpm(player);
+                const bestKills = getBestKills(player);
 
                 return (
                   <Fragment key={player.id}>
