@@ -107,6 +107,41 @@ function normalizeBaseUrl(rawUrl: string) {
   return parsed.toString().replace(/\/$/, "");
 }
 
+async function resolveStatsWrapperBaseUrl(baseUrl: string) {
+  let response: Response;
+  try {
+    response = await fetch(baseUrl, {
+      cache: "no-store",
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+      },
+    });
+  } catch {
+    return baseUrl;
+  }
+
+  if (!response.ok) {
+    return baseUrl;
+  }
+
+  const html = await response.text();
+  const wrappedUrl =
+    html.match(/<meta\s+name=["']url["']\s+content=["']([^"']+)["']/i)?.[1] ??
+    html.match(/<frame[^>]+src=["']([^"']+)["']/i)?.[1];
+
+  if (!wrappedUrl) {
+    return baseUrl;
+  }
+
+  try {
+    return normalizeBaseUrl(wrappedUrl);
+  } catch {
+    return baseUrl;
+  }
+}
+
 function parseGameUrl(rawUrl: string) {
   const parsed = new URL(rawUrl.trim());
   const parts = parsed.pathname.split("/").filter(Boolean);
@@ -360,8 +395,27 @@ export async function scanTrackedServer(serverId: string, limit?: number): Promi
   }
 
   const pageLimit = limit ?? Number(process.env.SCAN_PAGE_LIMIT || 25);
-  const historyUrl = `${server.baseUrl}/api/get_scoreboard_maps?page=1&limit=${pageLimit}`;
-  const history = await fetchJson<GameHistory>(historyUrl);
+  let baseUrl = server.baseUrl;
+  let historyUrl = `${baseUrl}/api/get_scoreboard_maps?page=1&limit=${pageLimit}`;
+  let history: GameHistory;
+
+  try {
+    history = await fetchJson<GameHistory>(historyUrl);
+  } catch (error) {
+    const resolvedBaseUrl = await resolveStatsWrapperBaseUrl(baseUrl);
+    if (resolvedBaseUrl === baseUrl) {
+      throw error;
+    }
+
+    baseUrl = resolvedBaseUrl;
+    historyUrl = `${baseUrl}/api/get_scoreboard_maps?page=1&limit=${pageLimit}`;
+    history = await fetchJson<GameHistory>(historyUrl);
+
+    await prisma.trackedServer.update({
+      where: { id: serverId },
+      data: { baseUrl },
+    });
+  }
 
   if (history.failed) {
     throw new Error(history.error || `Failed to load game history from ${server.baseUrl}`);
@@ -390,7 +444,7 @@ export async function scanTrackedServer(serverId: string, limit?: number): Promi
       continue;
     }
 
-    const scan = await scanGameUrl(`${server.baseUrl}/games/${externalGameId}`);
+    const scan = await scanGameUrl(`${baseUrl}/games/${externalGameId}`);
     const saved = await saveScanResult(serverId, scan);
     newlyProcessedGames += 1;
     spottedSightings += saved.savedSightings;
@@ -485,7 +539,7 @@ export async function runScheduledPoll() {
 }
 
 export async function createTrackedServer({ name, baseUrl }: { name: string; baseUrl: string }) {
-  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  const normalizedBaseUrl = await resolveStatsWrapperBaseUrl(normalizeBaseUrl(baseUrl));
   const serverName = name.trim() || new URL(normalizedBaseUrl).hostname;
 
   return prisma.trackedServer.upsert({

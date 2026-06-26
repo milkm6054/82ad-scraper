@@ -50,4 +50,5 @@ https://server1.82nd.gg/games/83554
 - Add a tracked server by base URL, e.g. `https://server1.82nd.gg`.
 - `Scan recent games` reads `/api/get_scoreboard_maps` and skips games already processed.
 - `Scan one game` accepts a direct `/games/<id>` link.
+- Framed stats domains such as `http://stats.fll.fi` are resolved to their real CRCON backend URL automatically.
 - If a tracked server returns HTML or a temporary 502 instead of JSON, the poll records that server as failed and keeps scanning the others.
