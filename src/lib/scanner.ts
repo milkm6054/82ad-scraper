@@ -7,7 +7,7 @@ const MIN_KILLS = 40;
 const MIN_KPM = 1.0;
 const MIN_ALLOWED_SHARE = 0.70;
 const DEFAULT_POLL_INTERVAL_MINUTES = 120;
-const DEFAULT_82AD_SCAN_PAGE_LIMIT = 10;
+const DEFAULT_82AD_SCAN_PAGE_LIMIT = 40;
 const DEFAULT_82AD_SERVER_CONFIG = [
   { name: "82AD Server 1", baseUrl: "https://server1.82nd.gg" },
   { name: "82AD Server 2", baseUrl: "https://server2.82nd.gg" },
@@ -145,7 +145,7 @@ const TALENT_SPOTTER_CRITERIA: ScanCriteria = {
 };
 
 const EIGHTYSECOND_CRITERIA: ScanCriteria = {
-  minKillsExclusive: 30,
+  minKillsExclusive: 60,
   minKpmInclusive: 0.75,
   minDurationSeconds: 30 * 60,
 };

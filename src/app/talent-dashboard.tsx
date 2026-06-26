@@ -115,8 +115,10 @@ type EightySecondDashboardResponse = {
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
+type EightySecondSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills";
 type SortDirection = "asc" | "desc";
 type DashboardTab = "talent" | "82ad";
+const EIGHTYSECOND_AUTO_REFRESH_MS = 2 * 60 * 60 * 1000;
 
 async function parseResponse<T>(response: Response): Promise<T & { error?: string }> {
   const text = await response.text();
@@ -252,6 +254,8 @@ export function TalentDashboard() {
   const [now, setNow] = useState(() => Date.now());
   const [playerSortKey, setPlayerSortKey] = useState<PlayerSortKey>("timesSpotted");
   const [playerSortDirection, setPlayerSortDirection] = useState<SortDirection>("desc");
+  const [eightySecondSortKey, setEightySecondSortKey] = useState<EightySecondSortKey>("bestKpm");
+  const [eightySecondSortDirection, setEightySecondSortDirection] = useState<SortDirection>("desc");
 
   const loadDashboard = useCallback(async () => {
     const response = await fetch("/api/dashboard", { cache: "no-store" });
@@ -350,6 +354,22 @@ export function TalentDashboard() {
   }, [activeTab, eightySecondData.players.length, eightySecondData.servers.length, loadEightySecondDashboard]);
 
   useEffect(() => {
+    if (activeTab !== "82ad") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadEightySecondDashboard().catch((loadError) => {
+        setEightySecondError(
+          loadError instanceof Error ? loadError.message : "Failed to auto-refresh 82AD server stats.",
+        );
+      });
+    }, EIGHTYSECOND_AUTO_REFRESH_MS);
+
+    return () => window.clearInterval(interval);
+  }, [activeTab, loadEightySecondDashboard]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, []);
@@ -399,6 +419,34 @@ export function TalentDashboard() {
       return left.name.localeCompare(right.name);
     });
   }, [data.players, playerSortDirection, playerSortKey]);
+
+  const sortedEightySecondPlayers = useMemo(() => {
+    return [...eightySecondData.players].sort((left, right) => {
+      if (eightySecondSortKey === "name") {
+        const comparison = left.name.localeCompare(right.name);
+        return eightySecondSortDirection === "asc" ? comparison : -comparison;
+      }
+
+      const leftValue =
+        eightySecondSortKey === "timesSpotted"
+          ? left.timesSpotted
+          : eightySecondSortKey === "bestKpm"
+            ? left.bestKpm
+            : left.bestKills;
+      const rightValue =
+        eightySecondSortKey === "timesSpotted"
+          ? right.timesSpotted
+          : eightySecondSortKey === "bestKpm"
+            ? right.bestKpm
+            : right.bestKills;
+
+      if (leftValue !== rightValue) {
+        return eightySecondSortDirection === "asc" ? leftValue - rightValue : rightValue - leftValue;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
+  }, [eightySecondData.players, eightySecondSortDirection, eightySecondSortKey]);
 
   async function addServer(event: React.FormEvent) {
     event.preventDefault();
@@ -640,6 +688,16 @@ export function TalentDashboard() {
 
     setPlayerSortKey(key);
     setPlayerSortDirection(key === "name" ? "asc" : "desc");
+  }
+
+  function updateEightySecondSort(key: EightySecondSortKey) {
+    if (eightySecondSortKey === key) {
+      setEightySecondSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+
+    setEightySecondSortKey(key);
+    setEightySecondSortDirection(key === "name" ? "asc" : "desc");
   }
 
   return (
@@ -978,6 +1036,7 @@ export function TalentDashboard() {
                   </span>
                   .
                 </p>
+                <p className="muted mt-1 text-xs">Looks back across the last 40 games per server and auto-refreshes every 2 hours while this tab is open.</p>
               </div>
               <button
                 className="px-4 py-2"
@@ -1016,17 +1075,37 @@ export function TalentDashboard() {
               <table className="w-full border-collapse text-left text-sm">
                 <thead className="table-head muted">
                   <tr>
-                    <th className="px-4 py-3">Player</th>
+                    <th className="px-4 py-3">
+                      <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updateEightySecondSort("name")}>
+                        Player{getSortLabel("name", eightySecondSortKey, eightySecondSortDirection)}
+                      </button>
+                    </th>
                     <th className="px-4 py-3">Steam ID</th>
-                    <th className="px-4 py-3">Times spotted</th>
-                    <th className="px-4 py-3">Best KPM</th>
-                    <th className="px-4 py-3">Best kills</th>
+                    <th className="px-4 py-3">
+                      <button
+                        className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted"
+                        type="button"
+                        onClick={() => updateEightySecondSort("timesSpotted")}
+                      >
+                        Times spotted{getSortLabel("timesSpotted", eightySecondSortKey, eightySecondSortDirection)}
+                      </button>
+                    </th>
+                    <th className="px-4 py-3">
+                      <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updateEightySecondSort("bestKpm")}>
+                        Best KPM{getSortLabel("bestKpm", eightySecondSortKey, eightySecondSortDirection)}
+                      </button>
+                    </th>
+                    <th className="px-4 py-3">
+                      <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updateEightySecondSort("bestKills")}>
+                        Best kills{getSortLabel("bestKills", eightySecondSortKey, eightySecondSortDirection)}
+                      </button>
+                    </th>
                     <th className="px-4 py-3">Profile</th>
                     <th className="px-4 py-3"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {eightySecondData.players.map((player) => {
+                  {sortedEightySecondPlayers.map((player) => {
                     const expanded = expandedEightySecondPlayerIds.has(player.id);
 
                     return (
