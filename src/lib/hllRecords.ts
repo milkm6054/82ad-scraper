@@ -100,9 +100,7 @@ export async function fetchHllRecordStatsBatch(
     throw new Error(parsed.error);
   }
 
-  if (!Array.isArray(parsed)) {
-    throw new Error(`Unexpected HLLRecords batch scraper output: ${rawOutput}`);
-  }
+  const parsedItems = Array.isArray(parsed) ? parsed : [parsed];
 
   const results = new Map<string, HllRecordStatResult | Error>();
 
@@ -110,7 +108,7 @@ export async function fetchHllRecordStatsBatch(
     results.set(steamId64, new Error("No HLLRecords result returned for this player."));
   }
 
-  for (const item of parsed) {
+  for (const item of parsedItems) {
     const steamId64 = item.steamId64?.trim();
     if (!steamId64) {
       continue;
