@@ -1,6 +1,7 @@
 # 82AD Talent Spotter
 
 Small Next.js app for scanning public CRCON Hell Let Loose game stats and storing high-KPM player sightings.
+Spotted players are enriched with their HLLRecords 180d competitive KPM when their profile can be scraped.
 
 ## Spotting Rules
 
@@ -37,6 +38,8 @@ npm start
 `npm start` runs `prisma migrate deploy` before starting Next.js, so the app tables are created in the shared database.
 It also starts the background poller. By default, tracked servers are checked every 2 hours; override this with
 `POLL_INTERVAL_MINUTES`.
+
+The included Dockerfile installs Python, Playwright, and Chromium for the HLLRecords profile KPM scrape.
 
 ## Useful Test URLs
 

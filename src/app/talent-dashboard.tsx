@@ -32,6 +32,9 @@ type PlayerRow = {
   name: string;
   steamId64: string;
   hllRecordsUrl: string;
+  hllRecordsKpm180: number | null;
+  hllRecordsStatError: string | null;
+  hllRecordsStatFetchedAt: string | null;
   timesSpotted: number;
   sightings: SightingRow[];
 };
@@ -60,7 +63,7 @@ type DashboardResponse = {
   pollState: PollState;
 };
 
-type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills";
+type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
 type SortDirection = "asc" | "desc";
 
 async function parseResponse<T>(response: Response): Promise<T & { error?: string }> {
@@ -237,12 +240,16 @@ export function TalentDashboard() {
       const leftValue =
         playerSortKey === "timesSpotted"
           ? left.timesSpotted
+          : playerSortKey === "hllRecordsKpm180"
+            ? left.hllRecordsKpm180 ?? -1
           : playerSortKey === "bestKpm"
             ? getBestKpm(left)
             : getBestKills(left);
       const rightValue =
         playerSortKey === "timesSpotted"
           ? right.timesSpotted
+          : playerSortKey === "hllRecordsKpm180"
+            ? right.hllRecordsKpm180 ?? -1
           : playerSortKey === "bestKpm"
             ? getBestKpm(right)
             : getBestKills(right);
@@ -595,6 +602,15 @@ export function TalentDashboard() {
                   </button>
                 </th>
                 <th className="px-4 py-3">
+                  <button
+                    className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted"
+                    type="button"
+                    onClick={() => updatePlayerSort("hllRecordsKpm180")}
+                  >
+                    HLL KPM 180d{getSortLabel("hllRecordsKpm180", playerSortKey, playerSortDirection)}
+                  </button>
+                </th>
+                <th className="px-4 py-3">
                   <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updatePlayerSort("bestKills")}>
                     Best kills{getSortLabel("bestKills", playerSortKey, playerSortDirection)}
                   </button>
@@ -616,6 +632,9 @@ export function TalentDashboard() {
                       <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{bestKpm.toFixed(2)}</td>
+                      <td className="px-4 py-3" title={player.hllRecordsStatError || undefined}>
+                        {typeof player.hllRecordsKpm180 === "number" ? player.hllRecordsKpm180.toFixed(2) : "-"}
+                      </td>
                       <td className="px-4 py-3">{bestKills}</td>
                       <td className="px-4 py-3">
                         <a className="subtle-link underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
@@ -630,7 +649,7 @@ export function TalentDashboard() {
                     </tr>
                     {expanded ? (
                       <tr className="table-row row-muted">
-                        <td colSpan={7} className="px-4 py-4">
+                        <td colSpan={8} className="px-4 py-4">
                           <div className="grid gap-3">
                             {player.sightings.map((sighting) => (
                               <div key={sighting.id} className="surface p-3">
@@ -665,7 +684,7 @@ export function TalentDashboard() {
               })}
               {!loading && data.players.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center muted">
+                  <td colSpan={8} className="px-4 py-8 text-center muted">
                     No unrostered spotted players yet. Add a server or scan a game to start.
                   </td>
                 </tr>

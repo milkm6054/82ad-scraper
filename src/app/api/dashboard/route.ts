@@ -65,6 +65,9 @@ export async function GET() {
         name: player.name,
         steamId64: player.steamId64,
         hllRecordsUrl: player.hllRecordsUrl,
+        hllRecordsKpm180: player.hllRecordsKpm180,
+        hllRecordsStatError: player.hllRecordsStatError,
+        hllRecordsStatFetchedAt: player.hllRecordsStatFetchedAt?.toISOString() ?? null,
         timesSpotted: player._count.sightings,
         sightings: player.sightings.map((sighting) => ({
           id: sighting.id,

@@ -52,13 +52,16 @@ model ProcessedGame {
 }
 
 model SpottedPlayer {
-  id            String           @id @default(cuid())
-  steamId64     String           @unique
-  name          String
-  hllRecordsUrl String
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  sightings     PlayerSighting[]
+  id                      String           @id @default(cuid())
+  steamId64               String           @unique
+  name                    String
+  hllRecordsUrl           String
+  hllRecordsKpm180        Float?
+  hllRecordsStatError     String?
+  hllRecordsStatFetchedAt DateTime?
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+  sightings               PlayerSighting[]
 
   @@map("SpottedPlayer")
 }
