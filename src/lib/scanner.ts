@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { enrichMissingHllRecordsKpm, fetchHllRecordStatsBatch, HllRecordStatResult } from "@/lib/hllRecords";
+import { enrichHllRecordsKpm, fetchHllRecordStatsBatch, HllRecordStatResult } from "@/lib/hllRecords";
 
 const ALLOWED_KILL_TYPES = new Set(["infantry", "sniper", "machine_gun"]);
 const MIN_KILLS = 40;
@@ -557,7 +557,7 @@ export async function runScheduledPoll() {
   });
 
   const summary = await scanAllTrackedServers();
-  const hllRecordsKpm = await enrichMissingHllRecordsKpm(25);
+  const hllRecordsKpm = await enrichHllRecordsKpm(5, true);
   const finishedAt = new Date();
   const summaryWithEnrichment = { ...summary, hllRecordsKpm };
 

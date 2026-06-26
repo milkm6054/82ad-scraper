@@ -20,7 +20,7 @@ COMMON_EXECUTABLES = [
 
 
 def build_profile_url(steam_id64: str) -> str:
-    return f"{BASE_PROFILE_URL}/{steam_id64}?period=180d&comp="
+    return f"{BASE_PROFILE_URL}/{steam_id64}?period=180d"
 
 
 def detect_browser_executable() -> str | None:

@@ -126,12 +126,13 @@ export async function fetchHllRecordStatsBatch(
   return results;
 }
 
-export async function enrichMissingHllRecordsKpm(limit = 25) {
+export async function enrichHllRecordsKpm(limit = 25, includeExisting = false) {
   const players = await prisma.spottedPlayer.findMany({
-    where: {
-      hllRecordsKpm180: null,
-    },
-    orderBy: [{ hllRecordsStatFetchedAt: "asc" }, { createdAt: "asc" }],
+    where: includeExisting ? undefined : { hllRecordsKpm180: null },
+    orderBy: [
+      { hllRecordsStatFetchedAt: { sort: "asc", nulls: "first" } },
+      { createdAt: "asc" },
+    ],
     take: limit,
     select: {
       steamId64: true,
@@ -143,21 +144,18 @@ export async function enrichMissingHllRecordsKpm(limit = 25) {
     return { checked: 0, updated: 0, failed: 0 };
   }
 
-  const fetchedAt = new Date();
-  let statsBySteamId: Map<string, HllRecordStatResult | Error>;
-
-  try {
-    statsBySteamId = await fetchHllRecordStatsBatch(steamIds);
-  } catch (error) {
-    const statError = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
-    statsBySteamId = new Map(steamIds.map((steamId) => [steamId, statError]));
-  }
-
   let updated = 0;
   let failed = 0;
 
   for (const steamId64 of steamIds) {
-    const stats = statsBySteamId.get(steamId64);
+    const fetchedAt = new Date();
+    let stats: HllRecordStatResult | Error | undefined;
+
+    try {
+      stats = (await fetchHllRecordStatsBatch([steamId64])).get(steamId64);
+    } catch (error) {
+      stats = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
+    }
 
     if (stats && !(stats instanceof Error)) {
       await prisma.spottedPlayer.update({
@@ -184,4 +182,8 @@ export async function enrichMissingHllRecordsKpm(limit = 25) {
   }
 
   return { checked: steamIds.length, updated, failed };
+}
+
+export async function enrichMissingHllRecordsKpm(limit = 25) {
+  return enrichHllRecordsKpm(limit, false);
 }

@@ -134,6 +134,14 @@ function formatJsonMap(value: Record<string, number>) {
     .join(", ");
 }
 
+function formatShortError(value: string | null) {
+  if (!value) {
+    return "";
+  }
+
+  return value.length > 56 ? `${value.slice(0, 56)}...` : value;
+}
+
 function getBestKpm(player: PlayerRow) {
   return Math.max(...player.sightings.map((sighting) => sighting.kpm));
 }
@@ -390,7 +398,7 @@ export function TalentDashboard() {
       }
 
       setNotice(
-        `HLLRecords refresh checked ${payload.summary.checked} players. Updated: ${payload.summary.updated}. Failed: ${payload.summary.failed}.`,
+        `HLLRecords refresh checked ${payload.summary.checked} players. Updated: ${payload.summary.updated}. Failed: ${payload.summary.failed}. Click again to process the next batch.`,
       );
       await loadDashboard();
     } catch (refreshError) {
@@ -666,7 +674,7 @@ export function TalentDashboard() {
                         {typeof player.hllRecordsKpm180 === "number" ? (
                           player.hllRecordsKpm180.toFixed(2)
                         ) : player.hllRecordsStatError ? (
-                          <span className="text-amber-200">Error</span>
+                          <span className="text-amber-200">Error: {formatShortError(player.hllRecordsStatError)}</span>
                         ) : (
                           <span className="muted">Pending</span>
                         )}
