@@ -73,8 +73,50 @@ type DashboardResponse = {
   };
 };
 
+type EightySecondServerRow = {
+  name: string;
+  baseUrl: string;
+  checkedGames: number;
+  qualifyingGames: number;
+  sightings: number;
+  error: string | null;
+};
+
+type EightySecondSightingRow = {
+  id: string;
+  kills: number;
+  kpm: number;
+  gameLink: string;
+  mapName: string | null;
+  durationSeconds: number | null;
+  startedAt: string | null;
+  serverName: string;
+};
+
+type EightySecondPlayerRow = {
+  id: string;
+  name: string;
+  steamId64: string;
+  hllRecordsUrl: string | null;
+  timesSpotted: number;
+  bestKpm: number;
+  bestKills: number;
+  sightings: EightySecondSightingRow[];
+};
+
+type EightySecondDashboardResponse = {
+  criteria: {
+    minKillsExclusive: number;
+    minKpmInclusive: number;
+    minDurationSeconds: number;
+  };
+  servers: EightySecondServerRow[];
+  players: EightySecondPlayerRow[];
+};
+
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
 type SortDirection = "asc" | "desc";
+type DashboardTab = "talent" | "82ad";
 
 async function parseResponse<T>(response: Response): Promise<T & { error?: string }> {
   const text = await response.text();
@@ -173,6 +215,7 @@ function getSortLabel(key: PlayerSortKey, activeKey: PlayerSortKey, direction: S
 }
 
 export function TalentDashboard() {
+  const [activeTab, setActiveTab] = useState<DashboardTab>("talent");
   const [data, setData] = useState<DashboardResponse>({
     servers: [],
     players: [],
@@ -180,10 +223,20 @@ export function TalentDashboard() {
     hllRecordsKpmQueue: { batchSize: 5, intervalMinutes: 30 },
     pollState: { intervalMinutes: 120, lastStartedAt: null, lastFinishedAt: null, nextRunAt: null, lastSummary: null },
   });
+  const [eightySecondData, setEightySecondData] = useState<EightySecondDashboardResponse>({
+    criteria: {
+      minKillsExclusive: 30,
+      minKpmInclusive: 0.75,
+      minDurationSeconds: 1800,
+    },
+    servers: [],
+    players: [],
+  });
   const [serverName, setServerName] = useState("");
   const [serverUrl, setServerUrl] = useState("");
   const [gameUrl, setGameUrl] = useState("");
   const [expandedPlayerIds, setExpandedPlayerIds] = useState<Set<string>>(() => new Set());
+  const [expandedEightySecondPlayerIds, setExpandedEightySecondPlayerIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [scanningServerId, setScanningServerId] = useState<string | null>(null);
   const [deletingServerId, setDeletingServerId] = useState<string | null>(null);
@@ -191,7 +244,10 @@ export function TalentDashboard() {
   const [enrichingHllRecords, setEnrichingHllRecords] = useState(false);
   const [retryingHllRecords, setRetryingHllRecords] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loading82ad, setLoading82ad] = useState(false);
+  const [refreshing82ad, setRefreshing82ad] = useState(false);
   const [error, setError] = useState("");
+  const [eightySecondError, setEightySecondError] = useState("");
   const [notice, setNotice] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [playerSortKey, setPlayerSortKey] = useState<PlayerSortKey>("timesSpotted");
@@ -220,6 +276,25 @@ export function TalentDashboard() {
     });
   }, []);
 
+  const loadEightySecondDashboard = useCallback(async () => {
+    const response = await fetch("/api/82ad-dashboard", { cache: "no-store" });
+    const payload = await parseResponse<EightySecondDashboardResponse>(response);
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load 82AD server stats.");
+    }
+
+    setEightySecondData({
+      criteria: payload.criteria || {
+        minKillsExclusive: 30,
+        minKpmInclusive: 0.75,
+        minDurationSeconds: 1800,
+      },
+      servers: payload.servers || [],
+      players: payload.players || [],
+    });
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -242,6 +317,37 @@ export function TalentDashboard() {
       cancelled = true;
     };
   }, [loadDashboard]);
+
+  useEffect(() => {
+    if (activeTab !== "82ad") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function run() {
+      setLoading82ad(true);
+      try {
+        await loadEightySecondDashboard();
+      } catch (loadError) {
+        if (!cancelled) {
+          setEightySecondError(loadError instanceof Error ? loadError.message : "Failed to load 82AD server stats.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading82ad(false);
+        }
+      }
+    }
+
+    if (eightySecondData.players.length === 0 && eightySecondData.servers.length === 0) {
+      void run();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, eightySecondData.players.length, eightySecondData.servers.length, loadEightySecondDashboard]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
@@ -455,6 +561,21 @@ export function TalentDashboard() {
     }
   }
 
+  async function refreshEightySecondDashboard() {
+    setRefreshing82ad(true);
+    setEightySecondError("");
+
+    try {
+      await loadEightySecondDashboard();
+    } catch (refreshError) {
+      setEightySecondError(
+        refreshError instanceof Error ? refreshError.message : "Failed to refresh 82AD server stats.",
+      );
+    } finally {
+      setRefreshing82ad(false);
+    }
+  }
+
   async function scanGame(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -489,6 +610,18 @@ export function TalentDashboard() {
 
   function togglePlayer(playerId: string) {
     setExpandedPlayerIds((current) => {
+      const next = new Set(current);
+      if (next.has(playerId)) {
+        next.delete(playerId);
+      } else {
+        next.add(playerId);
+      }
+      return next;
+    });
+  }
+
+  function toggleEightySecondPlayer(playerId: string) {
+    setExpandedEightySecondPlayerIds((current) => {
       const next = new Set(current);
       if (next.has(playerId)) {
         next.delete(playerId);
@@ -541,11 +674,31 @@ export function TalentDashboard() {
           </div>
         </div>
       </section>
+      <section className="surface p-2">
+        <div className="flex flex-wrap gap-2">
+          <button
+            className={`px-4 py-2 ${activeTab === "talent" ? "primary-button" : ""}`}
+            type="button"
+            onClick={() => setActiveTab("talent")}
+          >
+            Talent spotter
+          </button>
+          <button
+            className={`px-4 py-2 ${activeTab === "82ad" ? "primary-button" : ""}`}
+            type="button"
+            onClick={() => setActiveTab("82ad")}
+          >
+            82AD server stats
+          </button>
+        </div>
+      </section>
 
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      {notice ? <p className="status-text text-sm">{notice}</p> : null}
+      {activeTab === "talent" ? (
+        <>
+          {error ? <p className="text-sm text-red-300">{error}</p> : null}
+          {notice ? <p className="status-text text-sm">{notice}</p> : null}
 
-      <section className="grid gap-4 lg:grid-cols-2">
+          <section className="grid gap-4 lg:grid-cols-2">
         <form onSubmit={addServer} className="surface p-4">
           <h2 className="text-lg font-semibold">Add tracked server</h2>
           <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1.4fr_auto]">
@@ -586,9 +739,9 @@ export function TalentDashboard() {
             </button>
           </div>
         </form>
-      </section>
+          </section>
 
-      <section className="surface p-4">
+          <section className="surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">Automatic polling</h2>
@@ -616,9 +769,9 @@ export function TalentDashboard() {
             ))}
           </div>
         ) : null}
-      </section>
+          </section>
 
-      <section className="surface p-4">
+          <section className="surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Tracked servers</h2>
           {loading ? <span className="muted text-sm">Loading...</span> : null}
@@ -657,9 +810,9 @@ export function TalentDashboard() {
           ))}
           {!loading && data.servers.length === 0 ? <p className="muted text-sm">No tracked servers yet.</p> : null}
         </div>
-      </section>
+          </section>
 
-      <section className="surface p-4">
+          <section className="surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">Spotted players</h2>
@@ -805,7 +958,149 @@ export function TalentDashboard() {
             </tbody>
           </table>
         </div>
-      </section>
+          </section>
+        </>
+      ) : (
+        <>
+          {eightySecondError ? <p className="text-sm text-red-300">{eightySecondError}</p> : null}
+          <section className="surface p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">82AD server stats</h2>
+                <p className="muted mt-1 text-sm">
+                  Only scans the two 82AD servers and spots players with KPM at or above{" "}
+                  <span className="font-semibold text-slate-100">{eightySecondData.criteria.minKpmInclusive.toFixed(2)}</span>,
+                  kills greater than{" "}
+                  <span className="font-semibold text-slate-100">{eightySecondData.criteria.minKillsExclusive}</span>,
+                  and games longer than{" "}
+                  <span className="font-semibold text-slate-100">
+                    {Math.round(eightySecondData.criteria.minDurationSeconds / 60)} minutes
+                  </span>
+                  .
+                </p>
+              </div>
+              <button
+                className="px-4 py-2"
+                type="button"
+                onClick={refreshEightySecondDashboard}
+                disabled={loading82ad || refreshing82ad}
+              >
+                {loading82ad || refreshing82ad ? "Refreshing..." : "Refresh 82AD stats"}
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {eightySecondData.servers.map((server) => (
+                <div key={server.baseUrl} className="surface p-4">
+                  <p className="font-semibold">{server.name}</p>
+                  <a className="subtle-link mt-1 block text-sm underline underline-offset-4" href={server.baseUrl} target="_blank" rel="noreferrer">
+                    {server.baseUrl}
+                  </a>
+                  <p className="muted mt-2 text-xs">
+                    Checked {server.checkedGames} games | Qualifying games {server.qualifyingGames} | Sightings {server.sightings}
+                  </p>
+                  {server.error ? <p className="mt-2 text-xs text-amber-200">{server.error}</p> : null}
+                </div>
+              ))}
+              {!loading82ad && eightySecondData.servers.length === 0 ? (
+                <div className="surface p-4 text-sm muted">No 82AD server data loaded yet.</div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="surface p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">82AD spotted players</h2>
+              <p className="muted text-sm">{eightySecondData.players.length} players matched the current rules</p>
+            </div>
+            <div className="table-wrap mt-4">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="table-head muted">
+                  <tr>
+                    <th className="px-4 py-3">Player</th>
+                    <th className="px-4 py-3">Steam ID</th>
+                    <th className="px-4 py-3">Times spotted</th>
+                    <th className="px-4 py-3">Best KPM</th>
+                    <th className="px-4 py-3">Best kills</th>
+                    <th className="px-4 py-3">Profile</th>
+                    <th className="px-4 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eightySecondData.players.map((player) => {
+                    const expanded = expandedEightySecondPlayerIds.has(player.id);
+
+                    return (
+                      <Fragment key={player.id}>
+                        <tr className="table-row">
+                          <td className="status-text px-4 py-3 font-semibold">{player.name}</td>
+                          <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
+                          <td className="px-4 py-3">{player.timesSpotted}</td>
+                          <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
+                          <td className="px-4 py-3">{player.bestKills}</td>
+                          <td className="px-4 py-3">
+                            {player.hllRecordsUrl ? (
+                              <a className="subtle-link underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
+                                HLLRecords
+                              </a>
+                            ) : (
+                              <span className="muted">N/A</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <button className="px-3 py-1.5" type="button" onClick={() => toggleEightySecondPlayer(player.id)}>
+                              {expanded ? "Hide" : "Show"}
+                            </button>
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr className="table-row row-muted">
+                            <td colSpan={7} className="px-4 py-4">
+                              <div className="grid gap-3">
+                                {player.sightings.map((sighting) => (
+                                  <div key={sighting.id} className="surface p-3">
+                                    <div className="flex flex-wrap justify-between gap-3">
+                                      <div>
+                                        <p className="font-semibold">
+                                          {sighting.serverName} | {sighting.mapName || "Unknown map"}
+                                        </p>
+                                        <p className="muted text-xs">
+                                          {formatDuration(sighting.durationSeconds)} | {formatDateTime(sighting.startedAt)}
+                                        </p>
+                                      </div>
+                                      <a className="subtle-link underline underline-offset-4" href={sighting.gameLink} target="_blank" rel="noreferrer">
+                                        Game link
+                                      </a>
+                                    </div>
+                                    <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
+                                      <p>
+                                        KPM: <span className="font-semibold">{sighting.kpm.toFixed(2)}</span>
+                                      </p>
+                                      <p>
+                                        Kills: <span className="font-semibold">{sighting.kills}</span>
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
+                  {!loading82ad && eightySecondData.players.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center muted">
+                        No players matched the 82AD thresholds yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
     </main>
   );
 }

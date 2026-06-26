@@ -7,6 +7,11 @@ const MIN_KILLS = 40;
 const MIN_KPM = 1.0;
 const MIN_ALLOWED_SHARE = 0.70;
 const DEFAULT_POLL_INTERVAL_MINUTES = 120;
+const DEFAULT_82AD_SCAN_PAGE_LIMIT = 10;
+const DEFAULT_82AD_SERVER_CONFIG = [
+  { name: "82AD Server 1", baseUrl: "https://server1.82nd.gg" },
+  { name: "82AD Server 2", baseUrl: "https://server2.82nd.gg" },
+] as const;
 
 type ScoreboardMap = {
   id: number;
@@ -61,6 +66,14 @@ type QualifiedPlayer = {
   weapons: Record<string, number>;
 };
 
+type ScanCriteria = {
+  minKillsExclusive: number;
+  minKpmInclusive: number;
+  minAllowedShare?: number | null;
+  allowedKillTypes?: Set<string> | null;
+  minDurationSeconds?: number | null;
+};
+
 export type RosteredPlayer = {
   steamId64: string;
 };
@@ -81,6 +94,60 @@ export type ServerScanSummary = {
   checkedGames: number;
   newlyProcessedGames: number;
   spottedSightings: number;
+};
+
+type EightySecondPlayerSighting = {
+  id: string;
+  kills: number;
+  kpm: number;
+  gameLink: string;
+  mapName: string | null;
+  durationSeconds: number | null;
+  startedAt: string | null;
+  serverName: string;
+};
+
+type EightySecondPlayerSummary = {
+  id: string;
+  name: string;
+  steamId64: string;
+  hllRecordsUrl: string | null;
+  timesSpotted: number;
+  bestKpm: number;
+  bestKills: number;
+  sightings: EightySecondPlayerSighting[];
+};
+
+type EightySecondServerSummary = {
+  name: string;
+  baseUrl: string;
+  checkedGames: number;
+  qualifyingGames: number;
+  sightings: number;
+  error: string | null;
+};
+
+export type EightySecondDashboardSummary = {
+  criteria: {
+    minKillsExclusive: number;
+    minKpmInclusive: number;
+    minDurationSeconds: number;
+  };
+  servers: EightySecondServerSummary[];
+  players: EightySecondPlayerSummary[];
+};
+
+const TALENT_SPOTTER_CRITERIA: ScanCriteria = {
+  minKillsExclusive: MIN_KILLS,
+  minKpmInclusive: MIN_KPM,
+  minAllowedShare: MIN_ALLOWED_SHARE,
+  allowedKillTypes: ALLOWED_KILL_TYPES,
+};
+
+const EIGHTYSECOND_CRITERIA: ScanCriteria = {
+  minKillsExclusive: 30,
+  minKpmInclusive: 0.75,
+  minDurationSeconds: 30 * 60,
 };
 
 type FailedServerScan = {
@@ -217,19 +284,22 @@ function normalizeNumberMap(value: Record<string, number | null> | null | undefi
   return normalized;
 }
 
-function getQualifiedPlayer(player: PlayerStat): QualifiedPlayer | null {
+function getQualifiedPlayer(player: PlayerStat, criteria: ScanCriteria): QualifiedPlayer | null {
   const kills = Number(player.kills ?? 0);
   const kpm = Number(player.kills_per_minute ?? 0);
 
-  if (kills <= MIN_KILLS || kpm <= MIN_KPM) {
+  if (kills <= criteria.minKillsExclusive || kpm < criteria.minKpmInclusive) {
     return null;
   }
 
   const killsByType = normalizeNumberMap(player.kills_by_type);
-  const allowedKills = Array.from(ALLOWED_KILL_TYPES).reduce((total, type) => total + (killsByType[type] ?? 0), 0);
+  const allowedKillTypes = criteria.allowedKillTypes ?? null;
+  const allowedKills = allowedKillTypes
+    ? Array.from(allowedKillTypes).reduce((total, type) => total + (killsByType[type] ?? 0), 0)
+    : kills;
   const allowedKillPercent = kills > 0 ? allowedKills / kills : 0;
 
-  if (allowedKillPercent < MIN_ALLOWED_SHARE) {
+  if (typeof criteria.minAllowedShare === "number" && allowedKillPercent < criteria.minAllowedShare) {
     return null;
   }
 
@@ -248,6 +318,25 @@ function getQualifiedPlayer(player: PlayerStat): QualifiedPlayer | null {
     killsByType,
     weapons: normalizeNumberMap(player.weapons),
   };
+}
+
+function get82adServers() {
+  const configured = process.env.EIGHTYSECOND_SERVER_URLS?.trim();
+  if (!configured) {
+    return DEFAULT_82AD_SERVER_CONFIG.map((server) => ({ ...server }));
+  }
+
+  return configured
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry, index) => {
+      const [rawName, rawUrl] = entry.includes("|") ? entry.split("|", 2) : [`82AD Server ${index + 1}`, entry];
+      return {
+        name: rawName.trim() || `82AD Server ${index + 1}`,
+        baseUrl: normalizeBaseUrl(rawUrl.trim()),
+      };
+    });
 }
 
 export async function loadActiveRosterSteamIds(steamIds: string[]) {
@@ -275,7 +364,7 @@ export async function loadActiveRosterSteamIds(steamIds: string[]) {
   return new Set(rosteredPlayers.map((player) => player.steamId64));
 }
 
-export async function scanGameUrl(gameUrl: string): Promise<ScanGameResult> {
+async function scanGameUrlWithCriteria(gameUrl: string, criteria: ScanCriteria): Promise<ScanGameResult> {
   const game = parseGameUrl(gameUrl);
   const payload = await fetchJson<GameScoreboard>(game.apiUrl);
 
@@ -291,19 +380,35 @@ export async function scanGameUrl(gameUrl: string): Promise<ScanGameResult> {
   const startedAt = parseDate(result.start);
   const endedAt = parseDate(result.end);
   const mapName = result.map?.pretty_name || result.map_name || null;
+  const durationSeconds = getDurationSeconds(startedAt, endedAt);
+  if (typeof criteria.minDurationSeconds === "number" && (durationSeconds ?? 0) <= criteria.minDurationSeconds) {
+    return {
+      gameId: String(result.id ?? game.gameId),
+      gameLink: game.gameLink,
+      mapName,
+      durationSeconds,
+      startedAt,
+      endedAt,
+      qualifiedPlayers: [],
+    };
+  }
   const qualifiedPlayers = (result.player_stats ?? [])
-    .map(getQualifiedPlayer)
+    .map((player) => getQualifiedPlayer(player, criteria))
     .filter((player): player is QualifiedPlayer => Boolean(player));
 
   return {
     gameId: String(result.id ?? game.gameId),
     gameLink: game.gameLink,
     mapName,
-    durationSeconds: getDurationSeconds(startedAt, endedAt),
+    durationSeconds,
     startedAt,
     endedAt,
     qualifiedPlayers,
   };
+}
+
+export async function scanGameUrl(gameUrl: string): Promise<ScanGameResult> {
+  return scanGameUrlWithCriteria(gameUrl, TALENT_SPOTTER_CRITERIA);
 }
 
 export async function saveScanResult(serverId: string, scan: ScanGameResult) {
@@ -503,6 +608,139 @@ export async function scanTrackedServer(serverId: string, limit?: number): Promi
     checkedGames: maps.length,
     newlyProcessedGames,
     spottedSightings,
+  };
+}
+
+export async function loadEightySecondDashboard(limit?: number): Promise<EightySecondDashboardSummary> {
+  const pageLimit = limit ?? Number(process.env.EIGHTYSECOND_SCAN_PAGE_LIMIT || DEFAULT_82AD_SCAN_PAGE_LIMIT);
+  const serverDefinitions = get82adServers();
+  const playersById = new Map<string, EightySecondPlayerSummary>();
+  const serverSummaries: EightySecondServerSummary[] = [];
+
+  for (const definition of serverDefinitions) {
+    let baseUrl = definition.baseUrl;
+    let checkedGames = 0;
+    let qualifyingGames = 0;
+    let sightings = 0;
+
+    try {
+      let historyUrl = `${baseUrl}/api/get_scoreboard_maps?page=1&limit=${pageLimit}`;
+      let history: GameHistory;
+
+      try {
+        history = await fetchJson<GameHistory>(historyUrl);
+      } catch (error) {
+        const resolvedBaseUrl = await resolveStatsWrapperBaseUrl(baseUrl);
+        if (resolvedBaseUrl === baseUrl) {
+          throw error;
+        }
+
+        baseUrl = resolvedBaseUrl;
+        historyUrl = `${baseUrl}/api/get_scoreboard_maps?page=1&limit=${pageLimit}`;
+        history = await fetchJson<GameHistory>(historyUrl);
+      }
+
+      if (history.failed) {
+        throw new Error(history.error || `Failed to load game history from ${baseUrl}`);
+      }
+
+      const maps = history.result?.maps ?? [];
+      checkedGames = maps.length;
+
+      for (const game of maps) {
+        const externalGameId = String(game.id);
+        const scan = await scanGameUrlWithCriteria(`${baseUrl}/games/${externalGameId}`, EIGHTYSECOND_CRITERIA);
+
+        if (scan.qualifiedPlayers.length === 0) {
+          continue;
+        }
+
+        qualifyingGames += 1;
+
+        for (const player of scan.qualifiedPlayers) {
+          sightings += 1;
+          const existing =
+            playersById.get(player.steamId64) ??
+            {
+              id: player.steamId64,
+              name: player.name,
+              steamId64: player.steamId64,
+              hllRecordsUrl: /^\d{17}$/.test(player.steamId64)
+                ? `https://hllrecords.com/profiles/${player.steamId64}`
+                : null,
+              timesSpotted: 0,
+              bestKpm: 0,
+              bestKills: 0,
+              sightings: [],
+            };
+
+          existing.name = player.name;
+          existing.timesSpotted += 1;
+          existing.bestKpm = Math.max(existing.bestKpm, player.kpm);
+          existing.bestKills = Math.max(existing.bestKills, player.kills);
+          existing.sightings.push({
+            id: `${definition.name}-${scan.gameId}-${player.steamId64}`,
+            kills: player.kills,
+            kpm: player.kpm,
+            gameLink: scan.gameLink,
+            mapName: scan.mapName,
+            durationSeconds: scan.durationSeconds,
+            startedAt: scan.startedAt?.toISOString() ?? null,
+            serverName: definition.name,
+          });
+          playersById.set(player.steamId64, existing);
+        }
+      }
+
+      serverSummaries.push({
+        name: definition.name,
+        baseUrl,
+        checkedGames,
+        qualifyingGames,
+        sightings,
+        error: null,
+      });
+    } catch (error) {
+      serverSummaries.push({
+        name: definition.name,
+        baseUrl,
+        checkedGames,
+        qualifyingGames,
+        sightings,
+        error: error instanceof Error ? error.message : "Failed to load 82AD server stats.",
+      });
+    }
+  }
+
+  const players = Array.from(playersById.values())
+    .map((player) => ({
+      ...player,
+      sightings: player.sightings.sort((left, right) => {
+        const leftTime = left.startedAt ? new Date(left.startedAt).getTime() : 0;
+        const rightTime = right.startedAt ? new Date(right.startedAt).getTime() : 0;
+        return rightTime - leftTime;
+      }),
+    }))
+    .sort((left, right) => {
+      if (left.bestKpm !== right.bestKpm) {
+        return right.bestKpm - left.bestKpm;
+      }
+
+      if (left.bestKills !== right.bestKills) {
+        return right.bestKills - left.bestKills;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
+
+  return {
+    criteria: {
+      minKillsExclusive: EIGHTYSECOND_CRITERIA.minKillsExclusive,
+      minKpmInclusive: EIGHTYSECOND_CRITERIA.minKpmInclusive,
+      minDurationSeconds: EIGHTYSECOND_CRITERIA.minDurationSeconds ?? 0,
+    },
+    servers: serverSummaries,
+    players,
   };
 }
 

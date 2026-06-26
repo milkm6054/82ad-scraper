@@ -40,6 +40,8 @@ It also starts the background poller. By default, tracked servers are checked ev
 `POLL_INTERVAL_MINUTES`.
 HLLRecords KPM enrichment runs separately every 30 minutes in small batches; override the interval with
 `HLLRECORDS_KPM_INTERVAL_MINUTES` and batch size with `HLLRECORDS_REFRESH_LIMIT`.
+The 82AD tab reads its two server URLs from `EIGHTYSECOND_SERVER_URLS` and scans a recent page size set by
+`EIGHTYSECOND_SCAN_PAGE_LIMIT`.
 
 The included Dockerfile installs Python, Playwright, and Chromium for the HLLRecords profile KPM scrape.
 
