@@ -38,6 +38,8 @@ npm start
 `npm start` runs `prisma migrate deploy` before starting Next.js, so the app tables are created in the shared database.
 It also starts the background poller. By default, tracked servers are checked every 2 hours; override this with
 `POLL_INTERVAL_MINUTES`.
+HLLRecords KPM enrichment runs separately every 30 minutes in small batches; override the interval with
+`HLLRECORDS_KPM_INTERVAL_MINUTES` and batch size with `HLLRECORDS_REFRESH_LIMIT`.
 
 The included Dockerfile installs Python, Playwright, and Chromium for the HLLRecords profile KPM scrape.
 

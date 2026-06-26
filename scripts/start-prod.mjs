@@ -31,10 +31,12 @@ function waitFor(child) {
 await waitFor(run(npx, ["prisma", "migrate", "deploy"]));
 
 const poller = run(node, ["scripts/poll-servers-loop.mjs"]);
+const hllKpmPoller = run(node, ["scripts/hllrecords-kpm-loop.mjs"]);
 const next = run(npx, ["next", "start", "-H", "0.0.0.0", "-p", port]);
 
 function shutdown() {
   poller.kill("SIGTERM");
+  hllKpmPoller.kill("SIGTERM");
   next.kill("SIGTERM");
 }
 

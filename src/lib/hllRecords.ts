@@ -24,6 +24,8 @@ export type HllRecordStatResult = {
   kpm180: number | null;
 };
 
+export type HllRecordsKpmMode = "pending" | "failed" | "refresh";
+
 async function runPythonScraper(args: string[]): Promise<string> {
   const scriptPath = path.join(process.cwd(), "scripts", "fetch_hll_stats.py");
   let rawOutput = "";
@@ -138,11 +140,26 @@ export async function fetchHllRecordStatsBatch(
   return results;
 }
 
-export async function enrichHllRecordsKpm(limit = 25, includeExisting = false) {
+function getQueueWhere(mode: HllRecordsKpmMode) {
+  if (mode === "failed") {
+    return {
+      OR: [{ hllRecordsStatError: { not: null } }, { hllRecordsKpm180: { lte: 0 } }],
+    };
+  }
+
+  if (mode === "refresh") {
+    return undefined;
+  }
+
+  return {
+    hllRecordsStatError: null,
+    OR: [{ hllRecordsKpm180: null }, { hllRecordsKpm180: { lte: 0 } }],
+  };
+}
+
+export async function enrichHllRecordsKpm(limit = 25, mode: HllRecordsKpmMode = "pending") {
   const priorityPlayers = await prisma.spottedPlayer.findMany({
-    where: {
-      OR: [{ hllRecordsKpm180: null }, { hllRecordsKpm180: { lte: 0 } }, { hllRecordsStatError: { not: null } }],
-    },
+    where: getQueueWhere(mode),
     orderBy: [
       { hllRecordsStatFetchedAt: { sort: "asc", nulls: "first" } },
       { createdAt: "asc" },
@@ -152,33 +169,8 @@ export async function enrichHllRecordsKpm(limit = 25, includeExisting = false) {
       steamId64: true,
     },
   });
-  const prioritySteamIds = new Set(priorityPlayers.map((player) => player.steamId64));
-  const remainingLimit = Math.max(0, limit - priorityPlayers.length);
-  const refreshPlayers =
-    includeExisting && remainingLimit > 0
-      ? await prisma.spottedPlayer.findMany({
-          where: {
-            steamId64: {
-              notIn: Array.from(prioritySteamIds),
-            },
-            hllRecordsKpm180: {
-              gt: 0,
-            },
-            hllRecordsStatError: null,
-          },
-          orderBy: [
-            { hllRecordsStatFetchedAt: { sort: "asc", nulls: "first" } },
-            { createdAt: "asc" },
-          ],
-          take: remainingLimit,
-          select: {
-            steamId64: true,
-          },
-        })
-      : [];
-  const players = [...priorityPlayers, ...refreshPlayers];
 
-  const steamIds = players.map((player) => player.steamId64);
+  const steamIds = priorityPlayers.map((player) => player.steamId64);
   if (steamIds.length === 0) {
     return { checked: 0, updated: 0, failed: 0 };
   }
@@ -220,9 +212,9 @@ export async function enrichHllRecordsKpm(limit = 25, includeExisting = false) {
     failed += 1;
   }
 
-  return { checked: steamIds.length, updated, failed };
+  return { checked: steamIds.length, updated, failed, mode };
 }
 
 export async function enrichMissingHllRecordsKpm(limit = 25) {
-  return enrichHllRecordsKpm(limit, false);
+  return enrichHllRecordsKpm(limit, "pending");
 }

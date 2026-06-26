@@ -48,7 +48,7 @@ export async function GET() {
       (counts, player) => {
         if (typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0) {
           counts.ready += 1;
-        } else if (player.hllRecordsStatError) {
+        } else if (player.hllRecordsStatError || (typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 <= 0)) {
           counts.failed += 1;
         } else {
           counts.pending += 1;
@@ -58,6 +58,8 @@ export async function GET() {
       },
       { ready: 0, pending: 0, failed: 0, total: freePlayers.length },
     );
+    const hllRecordsBatchSize = Number(process.env.HLLRECORDS_REFRESH_LIMIT || 5);
+    const hllRecordsIntervalMinutes = Number(process.env.HLLRECORDS_KPM_INTERVAL_MINUTES || 30);
 
     return NextResponse.json({
       servers: servers.map((server) => ({
@@ -75,6 +77,13 @@ export async function GET() {
         lastSummary: pollState?.lastSummary ?? null,
       },
       hllRecordsKpm,
+      hllRecordsKpmQueue: {
+        batchSize: Number.isFinite(hllRecordsBatchSize) && hllRecordsBatchSize > 0 ? hllRecordsBatchSize : 5,
+        intervalMinutes:
+          Number.isFinite(hllRecordsIntervalMinutes) && hllRecordsIntervalMinutes > 0
+            ? hllRecordsIntervalMinutes
+            : 30,
+      },
       players: freePlayers.map((player) => ({
         id: player.id,
         name: player.name,

@@ -67,6 +67,10 @@ type DashboardResponse = {
     failed: number;
     total: number;
   };
+  hllRecordsKpmQueue: {
+    batchSize: number;
+    intervalMinutes: number;
+  };
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
@@ -173,6 +177,7 @@ export function TalentDashboard() {
     servers: [],
     players: [],
     hllRecordsKpm: { ready: 0, pending: 0, failed: 0, total: 0 },
+    hllRecordsKpmQueue: { batchSize: 5, intervalMinutes: 30 },
     pollState: { intervalMinutes: 120, lastStartedAt: null, lastFinishedAt: null, nextRunAt: null, lastSummary: null },
   });
   const [serverName, setServerName] = useState("");
@@ -184,6 +189,7 @@ export function TalentDashboard() {
   const [deletingServerId, setDeletingServerId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [enrichingHllRecords, setEnrichingHllRecords] = useState(false);
+  const [retryingHllRecords, setRetryingHllRecords] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -203,6 +209,7 @@ export function TalentDashboard() {
       servers: payload.servers || [],
       players: payload.players || [],
       hllRecordsKpm: payload.hllRecordsKpm || { ready: 0, pending: 0, failed: 0, total: 0 },
+      hllRecordsKpmQueue: payload.hllRecordsKpmQueue || { batchSize: 5, intervalMinutes: 30 },
       pollState: payload.pollState || {
         intervalMinutes: 120,
         lastStartedAt: null,
@@ -406,7 +413,7 @@ export function TalentDashboard() {
     setNotice("");
 
     try {
-      const response = await fetch("/api/hllrecords/enrich", { method: "POST" });
+      const response = await fetch("/api/hllrecords/enrich?mode=pending", { method: "POST" });
       const payload = await parseResponse<{ summary: { checked: number; updated: number; failed: number } }>(response);
 
       if (!response.ok) {
@@ -414,13 +421,37 @@ export function TalentDashboard() {
       }
 
       setNotice(
-        `HLLRecords refresh checked ${payload.summary.checked} players. Updated: ${payload.summary.updated}. Failed: ${payload.summary.failed}. Click again to process the next batch.`,
+        `HLLRecords pending check processed ${payload.summary.checked} players. Updated: ${payload.summary.updated}. Failed: ${payload.summary.failed}.`,
       );
       await loadDashboard();
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : "Failed to refresh HLLRecords KPM.");
     } finally {
       setEnrichingHllRecords(false);
+    }
+  }
+
+  async function retryFailedHllRecordsKpm() {
+    setRetryingHllRecords(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/hllrecords/enrich?mode=failed", { method: "POST" });
+      const payload = await parseResponse<{ summary: { checked: number; updated: number; failed: number } }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to retry failed HLLRecords KPM.");
+      }
+
+      setNotice(
+        `HLLRecords failed retry processed ${payload.summary.checked} players. Updated: ${payload.summary.updated}. Still failed: ${payload.summary.failed}.`,
+      );
+      await loadDashboard();
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : "Failed to retry failed HLLRecords KPM.");
+    } finally {
+      setRetryingHllRecords(false);
     }
   }
 
@@ -636,10 +667,24 @@ export function TalentDashboard() {
               HLL KPM: {data.hllRecordsKpm.ready}/{data.hllRecordsKpm.total} ready | {data.hllRecordsKpm.pending} pending |{" "}
               {data.hllRecordsKpm.failed} failed
             </p>
+            <p className="muted mt-1 text-xs">
+              Getting HLL KPM for up to {data.hllRecordsKpmQueue.batchSize} players every{" "}
+              {data.hllRecordsKpmQueue.intervalMinutes} minutes. {data.hllRecordsKpm.pending} left in the automatic queue.
+            </p>
           </div>
-          <button className="px-4 py-2" type="button" onClick={refreshHllRecordsKpm} disabled={enrichingHllRecords}>
-            {enrichingHllRecords ? "Refreshing 5..." : "Refresh next 5"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button className="px-4 py-2" type="button" onClick={refreshHllRecordsKpm} disabled={enrichingHllRecords}>
+              {enrichingHllRecords ? "Checking..." : "Check pending now"}
+            </button>
+            <button
+              className="px-4 py-2"
+              type="button"
+              onClick={retryFailedHllRecordsKpm}
+              disabled={retryingHllRecords || data.hllRecordsKpm.failed === 0}
+            >
+              {retryingHllRecords ? "Retrying..." : "Retry failed"}
+            </button>
+          </div>
         </div>
         <div className="table-wrap mt-4">
           <table className="w-full border-collapse text-left text-sm">
