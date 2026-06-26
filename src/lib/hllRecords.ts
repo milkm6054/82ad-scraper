@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 const PYTHON_CANDIDATES = [process.env.PYTHON_BIN?.trim(), "python3", "python"].filter(
   (value): value is string => Boolean(value),
 );
+const STEAM_ID64_PATTERN = /^\d{17}$/;
 
 type PythonFetchResult = {
   steamId64?: string;
@@ -73,6 +74,10 @@ function parseSingleResult(parsed: PythonFetchResult): HllRecordStatResult {
     throw new Error("HLLRecords scraper did not return KPM.");
   }
 
+  if (parsed.kpm180 <= 0) {
+    throw new Error("HLLRecords returned 0 KPM for this profile.");
+  }
+
   return {
     sourceUrl: parsed.sourceUrl,
     kpm180: parsed.kpm180,
@@ -86,8 +91,19 @@ export async function fetchHllRecordStatsBatch(
   if (steamIds.length === 0) {
     return new Map();
   }
+  const validSteamIds = steamIds.filter((steamId) => STEAM_ID64_PATTERN.test(steamId));
+  const invalidSteamIds = steamIds.filter((steamId) => !STEAM_ID64_PATTERN.test(steamId));
+  const results = new Map<string, HllRecordStatResult | Error>();
 
-  const rawOutput = await runPythonScraper(steamIds);
+  for (const steamId64 of invalidSteamIds) {
+    results.set(steamId64, new Error("Not a Steam ID64; HLLRecords profile KPM is unavailable."));
+  }
+
+  if (validSteamIds.length === 0) {
+    return results;
+  }
+
+  const rawOutput = await runPythonScraper(validSteamIds);
 
   let parsed: PythonFetchResult[] | PythonFetchResult;
   try {
@@ -102,9 +118,7 @@ export async function fetchHllRecordStatsBatch(
 
   const parsedItems = Array.isArray(parsed) ? parsed : [parsed];
 
-  const results = new Map<string, HllRecordStatResult | Error>();
-
-  for (const steamId64 of steamIds) {
+  for (const steamId64 of validSteamIds) {
     results.set(steamId64, new Error("No HLLRecords result returned for this player."));
   }
 
@@ -125,8 +139,10 @@ export async function fetchHllRecordStatsBatch(
 }
 
 export async function enrichHllRecordsKpm(limit = 25, includeExisting = false) {
-  const players = await prisma.spottedPlayer.findMany({
-    where: includeExisting ? undefined : { hllRecordsKpm180: null },
+  const priorityPlayers = await prisma.spottedPlayer.findMany({
+    where: {
+      OR: [{ hllRecordsKpm180: null }, { hllRecordsKpm180: { lte: 0 } }, { hllRecordsStatError: { not: null } }],
+    },
     orderBy: [
       { hllRecordsStatFetchedAt: { sort: "asc", nulls: "first" } },
       { createdAt: "asc" },
@@ -136,6 +152,31 @@ export async function enrichHllRecordsKpm(limit = 25, includeExisting = false) {
       steamId64: true,
     },
   });
+  const prioritySteamIds = new Set(priorityPlayers.map((player) => player.steamId64));
+  const remainingLimit = Math.max(0, limit - priorityPlayers.length);
+  const refreshPlayers =
+    includeExisting && remainingLimit > 0
+      ? await prisma.spottedPlayer.findMany({
+          where: {
+            steamId64: {
+              notIn: Array.from(prioritySteamIds),
+            },
+            hllRecordsKpm180: {
+              gt: 0,
+            },
+            hllRecordsStatError: null,
+          },
+          orderBy: [
+            { hllRecordsStatFetchedAt: { sort: "asc", nulls: "first" } },
+            { createdAt: "asc" },
+          ],
+          take: remainingLimit,
+          select: {
+            steamId64: true,
+          },
+        })
+      : [];
+  const players = [...priorityPlayers, ...refreshPlayers];
 
   const steamIds = players.map((player) => player.steamId64);
   if (steamIds.length === 0) {

@@ -61,6 +61,12 @@ type DashboardResponse = {
   servers: ServerRow[];
   players: PlayerRow[];
   pollState: PollState;
+  hllRecordsKpm: {
+    ready: number;
+    pending: number;
+    failed: number;
+    total: number;
+  };
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
@@ -142,6 +148,10 @@ function formatShortError(value: string | null) {
   return value.length > 56 ? `${value.slice(0, 56)}...` : value;
 }
 
+function hasValidHllKpm(player: PlayerRow): player is PlayerRow & { hllRecordsKpm180: number } {
+  return typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0;
+}
+
 function getBestKpm(player: PlayerRow) {
   return Math.max(...player.sightings.map((sighting) => sighting.kpm));
 }
@@ -162,6 +172,7 @@ export function TalentDashboard() {
   const [data, setData] = useState<DashboardResponse>({
     servers: [],
     players: [],
+    hllRecordsKpm: { ready: 0, pending: 0, failed: 0, total: 0 },
     pollState: { intervalMinutes: 120, lastStartedAt: null, lastFinishedAt: null, nextRunAt: null, lastSummary: null },
   });
   const [serverName, setServerName] = useState("");
@@ -191,6 +202,7 @@ export function TalentDashboard() {
     setData({
       servers: payload.servers || [],
       players: payload.players || [],
+      hllRecordsKpm: payload.hllRecordsKpm || { ready: 0, pending: 0, failed: 0, total: 0 },
       pollState: payload.pollState || {
         intervalMinutes: 120,
         lastStartedAt: null,
@@ -250,7 +262,9 @@ export function TalentDashboard() {
         playerSortKey === "timesSpotted"
           ? left.timesSpotted
           : playerSortKey === "hllRecordsKpm180"
-            ? left.hllRecordsKpm180 ?? -1
+            ? hasValidHllKpm(left)
+              ? left.hllRecordsKpm180 ?? -1
+              : -1
           : playerSortKey === "bestKpm"
             ? getBestKpm(left)
             : getBestKills(left);
@@ -258,7 +272,9 @@ export function TalentDashboard() {
         playerSortKey === "timesSpotted"
           ? right.timesSpotted
           : playerSortKey === "hllRecordsKpm180"
-            ? right.hllRecordsKpm180 ?? -1
+            ? hasValidHllKpm(right)
+              ? right.hllRecordsKpm180 ?? -1
+              : -1
           : playerSortKey === "bestKpm"
             ? getBestKpm(right)
             : getBestKills(right);
@@ -614,9 +630,15 @@ export function TalentDashboard() {
 
       <section className="surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">Spotted players</h2>
+          <div>
+            <h2 className="text-lg font-semibold">Spotted players</h2>
+            <p className="muted mt-1 text-xs">
+              HLL KPM: {data.hllRecordsKpm.ready}/{data.hllRecordsKpm.total} ready | {data.hllRecordsKpm.pending} pending |{" "}
+              {data.hllRecordsKpm.failed} failed
+            </p>
+          </div>
           <button className="px-4 py-2" type="button" onClick={refreshHllRecordsKpm} disabled={enrichingHllRecords}>
-            {enrichingHllRecords ? "Refreshing..." : "Refresh HLL KPM"}
+            {enrichingHllRecords ? "Refreshing 5..." : "Refresh next 5"}
           </button>
         </div>
         <div className="table-wrap mt-4">
@@ -639,13 +661,13 @@ export function TalentDashboard() {
                     Best KPM{getSortLabel("bestKpm", playerSortKey, playerSortDirection)}
                   </button>
                 </th>
-                <th className="px-4 py-3">
+                <th className="w-28 px-3 py-3">
                   <button
                     className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted"
                     type="button"
                     onClick={() => updatePlayerSort("hllRecordsKpm180")}
                   >
-                    HLL KPM 180d{getSortLabel("hllRecordsKpm180", playerSortKey, playerSortDirection)}
+                    HLL KPM{getSortLabel("hllRecordsKpm180", playerSortKey, playerSortDirection)}
                   </button>
                 </th>
                 <th className="px-4 py-3">
@@ -670,11 +692,13 @@ export function TalentDashboard() {
                       <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{bestKpm.toFixed(2)}</td>
-                      <td className="px-4 py-3" title={player.hllRecordsStatError || undefined}>
-                        {typeof player.hllRecordsKpm180 === "number" ? (
+                      <td className="w-28 whitespace-nowrap px-3 py-3" title={player.hllRecordsStatError || undefined}>
+                        {hasValidHllKpm(player) ? (
                           player.hllRecordsKpm180.toFixed(2)
                         ) : player.hllRecordsStatError ? (
-                          <span className="text-amber-200">Error: {formatShortError(player.hllRecordsStatError)}</span>
+                          <span className="text-amber-200" aria-label={formatShortError(player.hllRecordsStatError)}>
+                            Error
+                          </span>
                         ) : (
                           <span className="muted">Pending</span>
                         )}

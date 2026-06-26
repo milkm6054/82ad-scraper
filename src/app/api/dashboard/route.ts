@@ -44,6 +44,20 @@ export async function GET() {
 
     const activeRosterSteamIds = await loadActiveRosterSteamIds(players.map((player) => player.steamId64));
     const freePlayers = players.filter((player) => !activeRosterSteamIds.has(player.steamId64));
+    const hllRecordsKpm = freePlayers.reduce(
+      (counts, player) => {
+        if (typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0) {
+          counts.ready += 1;
+        } else if (player.hllRecordsStatError) {
+          counts.failed += 1;
+        } else {
+          counts.pending += 1;
+        }
+
+        return counts;
+      },
+      { ready: 0, pending: 0, failed: 0, total: freePlayers.length },
+    );
 
     return NextResponse.json({
       servers: servers.map((server) => ({
@@ -60,6 +74,7 @@ export async function GET() {
         nextRunAt: pollState?.nextRunAt?.toISOString() ?? null,
         lastSummary: pollState?.lastSummary ?? null,
       },
+      hllRecordsKpm,
       players: freePlayers.map((player) => ({
         id: player.id,
         name: player.name,
