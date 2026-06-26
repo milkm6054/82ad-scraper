@@ -36,9 +36,28 @@ type PlayerRow = {
   sightings: SightingRow[];
 };
 
+type PollSummary = {
+  checkedServers: number;
+  successfulServers: number;
+  failedServers: number;
+  checkedGames: number;
+  newlyProcessedGames: number;
+  spottedSightings: number;
+  failures?: { serverId: string; serverName: string; error: string }[];
+};
+
+type PollState = {
+  intervalMinutes: number;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  nextRunAt: string | null;
+  lastSummary: PollSummary | null;
+};
+
 type DashboardResponse = {
   servers: ServerRow[];
   players: PlayerRow[];
+  pollState: PollState;
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills";
@@ -84,6 +103,27 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function formatCountdown(nextRunAt: string | null, now: number) {
+  if (!nextRunAt) {
+    return "Waiting for first poll";
+  }
+
+  const remainingMs = new Date(nextRunAt).getTime() - now;
+  if (remainingMs <= 0) {
+    return "Due now";
+  }
+
+  const totalMinutes = Math.ceil(remainingMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+}
+
 function formatJsonMap(value: Record<string, number>) {
   return Object.entries(value)
     .sort((left, right) => right[1] - left[1])
@@ -108,16 +148,23 @@ function getSortLabel(key: PlayerSortKey, activeKey: PlayerSortKey, direction: S
 }
 
 export function TalentDashboard() {
-  const [data, setData] = useState<DashboardResponse>({ servers: [], players: [] });
+  const [data, setData] = useState<DashboardResponse>({
+    servers: [],
+    players: [],
+    pollState: { intervalMinutes: 120, lastStartedAt: null, lastFinishedAt: null, nextRunAt: null, lastSummary: null },
+  });
   const [serverName, setServerName] = useState("");
   const [serverUrl, setServerUrl] = useState("");
   const [gameUrl, setGameUrl] = useState("");
   const [expandedPlayerIds, setExpandedPlayerIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [scanningServerId, setScanningServerId] = useState<string | null>(null);
+  const [deletingServerId, setDeletingServerId] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [now, setNow] = useState(() => Date.now());
   const [playerSortKey, setPlayerSortKey] = useState<PlayerSortKey>("timesSpotted");
   const [playerSortDirection, setPlayerSortDirection] = useState<SortDirection>("desc");
 
@@ -132,6 +179,13 @@ export function TalentDashboard() {
     setData({
       servers: payload.servers || [],
       players: payload.players || [],
+      pollState: payload.pollState || {
+        intervalMinutes: 120,
+        lastStartedAt: null,
+        lastFinishedAt: null,
+        nextRunAt: null,
+        lastSummary: null,
+      },
     });
   }, []);
 
@@ -157,6 +211,11 @@ export function TalentDashboard() {
       cancelled = true;
     };
   }, [loadDashboard]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const summary = useMemo(() => {
     const sightings = data.players.reduce((total, player) => total + player.sightings.length, 0);
@@ -255,6 +314,57 @@ export function TalentDashboard() {
       setError(scanError instanceof Error ? scanError.message : "Failed to scan server.");
     } finally {
       setScanningServerId(null);
+    }
+  }
+
+  async function deleteServer(serverId: string) {
+    const confirmed = window.confirm("Remove this tracked server and its stored games/sightings?");
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingServerId(serverId);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch(`/api/servers/${serverId}`, { method: "DELETE" });
+      const payload = await parseResponse<{ ok: boolean }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to remove tracked server.");
+      }
+
+      setNotice("Tracked server removed.");
+      await loadDashboard();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to remove tracked server.");
+    } finally {
+      setDeletingServerId(null);
+    }
+  }
+
+  async function runPollNow() {
+    setPolling(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/poll", { method: "POST" });
+      const payload = await parseResponse<{ summary: PollSummary }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to poll tracked servers.");
+      }
+
+      setNotice(
+        `Poll complete. Servers: ${payload.summary.successfulServers}/${payload.summary.checkedServers}. New games: ${payload.summary.newlyProcessedGames}. Sightings: ${payload.summary.spottedSightings}.`,
+      );
+      await loadDashboard();
+    } catch (pollError) {
+      setError(pollError instanceof Error ? pollError.message : "Failed to poll tracked servers.");
+    } finally {
+      setPolling(false);
     }
   }
 
@@ -393,6 +503,36 @@ export function TalentDashboard() {
 
       <section className="surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Automatic polling</h2>
+            <p className="muted mt-1 text-sm">
+              Every {data.pollState.intervalMinutes} minutes | Next poll:{" "}
+              <span className="font-semibold text-slate-100">{formatCountdown(data.pollState.nextRunAt, now)}</span>
+            </p>
+            <p className="muted mt-1 text-xs">
+              Last finished {formatDateTime(data.pollState.lastFinishedAt)}
+              {data.pollState.lastSummary
+                ? ` | ${data.pollState.lastSummary.newlyProcessedGames} new games | ${data.pollState.lastSummary.spottedSightings} sightings | ${data.pollState.lastSummary.failedServers} failures`
+                : ""}
+            </p>
+          </div>
+          <button className="primary-button px-4 py-2" type="button" onClick={runPollNow} disabled={polling}>
+            {polling ? "Polling..." : "Run poll now"}
+          </button>
+        </div>
+        {data.pollState.lastSummary?.failures?.length ? (
+          <div className="mt-3 grid gap-2">
+            {data.pollState.lastSummary.failures.slice(0, 3).map((failure) => (
+              <p key={failure.serverId} className="text-xs text-amber-200">
+                {failure.serverName}: {failure.error}
+              </p>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="surface p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Tracked servers</h2>
           {loading ? <span className="muted text-sm">Loading...</span> : null}
         </div>
@@ -408,14 +548,24 @@ export function TalentDashboard() {
                   Processed games: {server.processedGames} | Last checked {formatDateTime(server.lastCheckedAt)}
                 </p>
               </div>
-              <button
-                className="px-4 py-2"
-                onClick={() => scanServer(server.id)}
-                disabled={scanningServerId === server.id}
-                type="button"
-              >
-                {scanningServerId === server.id ? "Scanning..." : "Scan recent games"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="px-4 py-2"
+                  onClick={() => scanServer(server.id)}
+                  disabled={scanningServerId === server.id || deletingServerId === server.id}
+                  type="button"
+                >
+                  {scanningServerId === server.id ? "Scanning..." : "Scan recent games"}
+                </button>
+                <button
+                  className="danger-button px-4 py-2"
+                  onClick={() => deleteServer(server.id)}
+                  disabled={deletingServerId === server.id || scanningServerId === server.id}
+                  type="button"
+                >
+                  {deletingServerId === server.id ? "Removing..." : "Remove"}
+                </button>
+              </div>
             </div>
           ))}
           {!loading && data.servers.length === 0 ? <p className="muted text-sm">No tracked servers yet.</p> : null}

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const [servers, players] = await Promise.all([
+    const [servers, players, pollState] = await Promise.all([
       prisma.trackedServer.findMany({
         orderBy: [{ createdAt: "desc" }],
         include: {
@@ -37,6 +37,9 @@ export async function GET() {
           },
         },
       }),
+      prisma.pollState.findUnique({
+        where: { id: "global" },
+      }),
     ]);
 
     const activeRosterSteamIds = await loadActiveRosterSteamIds(players.map((player) => player.steamId64));
@@ -50,6 +53,13 @@ export async function GET() {
         lastCheckedAt: server.lastCheckedAt?.toISOString() ?? null,
         processedGames: server._count.games,
       })),
+      pollState: {
+        intervalMinutes: pollState?.intervalMinutes ?? 120,
+        lastStartedAt: pollState?.lastStartedAt?.toISOString() ?? null,
+        lastFinishedAt: pollState?.lastFinishedAt?.toISOString() ?? null,
+        nextRunAt: pollState?.nextRunAt?.toISOString() ?? null,
+        lastSummary: pollState?.lastSummary ?? null,
+      },
       players: freePlayers.map((player) => ({
         id: player.id,
         name: player.name,

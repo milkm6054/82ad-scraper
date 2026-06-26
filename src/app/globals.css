@@ -82,6 +82,16 @@ button:disabled {
   color: var(--accent-foreground);
 }
 
+.danger-button {
+  border-color: #5b3b3f;
+  background: #211619;
+  color: #f2d6d9;
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: #8b535b;
+}
+
 .table-wrap {
   overflow-x: auto;
   border: 1px solid var(--border);

@@ -19,6 +19,19 @@ model TrackedServer {
   @@map("TrackedServer")
 }
 
+model PollState {
+  id              String    @id
+  intervalMinutes Int       @default(120)
+  lastStartedAt   DateTime?
+  lastFinishedAt  DateTime?
+  nextRunAt       DateTime?
+  lastSummary     Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("PollState")
+}
+
 model ProcessedGame {
   id              String           @id @default(cuid())
   serverId        String
@@ -51,18 +64,18 @@ model SpottedPlayer {
 }
 
 model PlayerSighting {
-  id                  String        @id @default(cuid())
-  spottedPlayerId     String
-  processedGameId     String
-  kills               Int
-  kpm                 Float
-  allowedKills        Int
-  allowedKillPercent  Float
-  killsByType         Json
-  weapons             Json?
-  createdAt           DateTime      @default(now())
-  spottedPlayer       SpottedPlayer @relation(fields: [spottedPlayerId], references: [id], onDelete: Cascade)
-  processedGame       ProcessedGame @relation(fields: [processedGameId], references: [id], onDelete: Cascade)
+  id                 String        @id @default(cuid())
+  spottedPlayerId    String
+  processedGameId    String
+  kills              Int
+  kpm                Float
+  allowedKills       Int
+  allowedKillPercent Float
+  killsByType        Json
+  weapons            Json?
+  createdAt          DateTime      @default(now())
+  spottedPlayer      SpottedPlayer @relation(fields: [spottedPlayerId], references: [id], onDelete: Cascade)
+  processedGame      ProcessedGame @relation(fields: [processedGameId], references: [id], onDelete: Cascade)
 
   @@unique([spottedPlayerId, processedGameId])
   @@index([processedGameId])

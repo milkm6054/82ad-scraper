@@ -5,6 +5,7 @@ const ALLOWED_KILL_TYPES = new Set(["infantry", "sniper", "machine_gun"]);
 const MIN_KILLS = 40;
 const MIN_KPM = 1.0;
 const MIN_ALLOWED_SHARE = 0.70;
+const DEFAULT_POLL_INTERVAL_MINUTES = 120;
 
 type ScoreboardMap = {
   id: number;
@@ -81,6 +82,23 @@ export type ServerScanSummary = {
   spottedSightings: number;
 };
 
+type FailedServerScan = {
+  serverId: string;
+  serverName: string;
+  error: string;
+};
+
+export type AllServerScanSummary = {
+  checkedServers: number;
+  successfulServers: number;
+  failedServers: number;
+  checkedGames: number;
+  newlyProcessedGames: number;
+  spottedSightings: number;
+  summaries: ServerScanSummary[];
+  failures: FailedServerScan[];
+};
+
 function normalizeBaseUrl(rawUrl: string) {
   const parsed = new URL(rawUrl.trim());
   parsed.hash = "";
@@ -116,12 +134,26 @@ async function fetchJson<T>(url: string): Promise<T> {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
     },
   });
+  const text = await response.text();
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} while fetching ${url}`);
+    const detail = text.trim().slice(0, 180);
+    throw new Error(`HTTP ${response.status} while fetching ${url}${detail ? `: ${detail}` : ""}`);
   }
 
-  return response.json() as Promise<T>;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const preview = text.trim().slice(0, 120) || "empty response";
+    throw new Error(
+      `Expected JSON while fetching ${url}, got "${preview}". Check the tracked server base URL exposes the CRCON API.`,
+    );
+  }
+}
+
+export function getPollIntervalMinutes() {
+  const configured = Number(process.env.POLL_INTERVAL_MINUTES || DEFAULT_POLL_INTERVAL_MINUTES);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_POLL_INTERVAL_MINUTES;
 }
 
 function parseDate(value?: string | null) {
@@ -378,6 +410,80 @@ export async function scanTrackedServer(serverId: string, limit?: number): Promi
   };
 }
 
+export async function scanAllTrackedServers(limit?: number): Promise<AllServerScanSummary> {
+  const servers = await prisma.trackedServer.findMany({
+    orderBy: [{ createdAt: "asc" }],
+  });
+
+  const summaries: ServerScanSummary[] = [];
+  const failures: FailedServerScan[] = [];
+
+  for (const server of servers) {
+    try {
+      summaries.push(await scanTrackedServer(server.id, limit));
+    } catch (error) {
+      failures.push({
+        serverId: server.id,
+        serverName: server.name,
+        error: error instanceof Error ? error.message : "Failed to scan server.",
+      });
+    }
+  }
+
+  return {
+    checkedServers: servers.length,
+    successfulServers: summaries.length,
+    failedServers: failures.length,
+    checkedGames: summaries.reduce((total, summary) => total + summary.checkedGames, 0),
+    newlyProcessedGames: summaries.reduce((total, summary) => total + summary.newlyProcessedGames, 0),
+    spottedSightings: summaries.reduce((total, summary) => total + summary.spottedSightings, 0),
+    summaries,
+    failures,
+  };
+}
+
+export async function runScheduledPoll() {
+  const intervalMinutes = getPollIntervalMinutes();
+  const startedAt = new Date();
+
+  await prisma.pollState.upsert({
+    where: { id: "global" },
+    create: {
+      id: "global",
+      intervalMinutes,
+      lastStartedAt: startedAt,
+      nextRunAt: new Date(startedAt.getTime() + intervalMinutes * 60 * 1000),
+    },
+    update: {
+      intervalMinutes,
+      lastStartedAt: startedAt,
+    },
+  });
+
+  const summary = await scanAllTrackedServers();
+  const finishedAt = new Date();
+
+  await prisma.pollState.upsert({
+    where: { id: "global" },
+    create: {
+      id: "global",
+      intervalMinutes,
+      lastStartedAt: startedAt,
+      lastFinishedAt: finishedAt,
+      nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
+      lastSummary: summary as unknown as Prisma.InputJsonValue,
+    },
+    update: {
+      intervalMinutes,
+      lastFinishedAt: finishedAt,
+      nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
+      lastSummary: summary as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return summary;
+}
+
 export async function createTrackedServer({ name, baseUrl }: { name: string; baseUrl: string }) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   const serverName = name.trim() || new URL(normalizedBaseUrl).hostname;
@@ -391,5 +497,11 @@ export async function createTrackedServer({ name, baseUrl }: { name: string; bas
     update: {
       name: serverName,
     },
+  });
+}
+
+export async function deleteTrackedServer(serverId: string) {
+  await prisma.trackedServer.delete({
+    where: { id: serverId },
   });
 }
