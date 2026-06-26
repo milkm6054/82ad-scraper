@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { prisma } from "@/lib/prisma";
 
 const execFileAsync = promisify(execFile);
 const PYTHON_CANDIDATES = [process.env.PYTHON_BIN?.trim(), "python3", "python"].filter(
@@ -123,4 +124,64 @@ export async function fetchHllRecordStatsBatch(
   }
 
   return results;
+}
+
+export async function enrichMissingHllRecordsKpm(limit = 25) {
+  const players = await prisma.spottedPlayer.findMany({
+    where: {
+      hllRecordsKpm180: null,
+    },
+    orderBy: [{ hllRecordsStatFetchedAt: "asc" }, { createdAt: "asc" }],
+    take: limit,
+    select: {
+      steamId64: true,
+    },
+  });
+
+  const steamIds = players.map((player) => player.steamId64);
+  if (steamIds.length === 0) {
+    return { checked: 0, updated: 0, failed: 0 };
+  }
+
+  const fetchedAt = new Date();
+  let statsBySteamId: Map<string, HllRecordStatResult | Error>;
+
+  try {
+    statsBySteamId = await fetchHllRecordStatsBatch(steamIds);
+  } catch (error) {
+    const statError = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
+    statsBySteamId = new Map(steamIds.map((steamId) => [steamId, statError]));
+  }
+
+  let updated = 0;
+  let failed = 0;
+
+  for (const steamId64 of steamIds) {
+    const stats = statsBySteamId.get(steamId64);
+
+    if (stats && !(stats instanceof Error)) {
+      await prisma.spottedPlayer.update({
+        where: { steamId64 },
+        data: {
+          hllRecordsKpm180: stats.kpm180,
+          hllRecordsStatError: null,
+          hllRecordsStatFetchedAt: fetchedAt,
+        },
+      });
+      updated += 1;
+      continue;
+    }
+
+    const message = stats instanceof Error ? stats.message : "No HLLRecords result returned for this player.";
+    await prisma.spottedPlayer.update({
+      where: { steamId64 },
+      data: {
+        hllRecordsStatError: message,
+        hllRecordsStatFetchedAt: fetchedAt,
+      },
+    });
+    failed += 1;
+  }
+
+  return { checked: steamIds.length, updated, failed };
 }

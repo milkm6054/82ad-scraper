@@ -164,6 +164,7 @@ export function TalentDashboard() {
   const [scanningServerId, setScanningServerId] = useState<string | null>(null);
   const [deletingServerId, setDeletingServerId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
+  const [enrichingHllRecords, setEnrichingHllRecords] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -375,6 +376,30 @@ export function TalentDashboard() {
     }
   }
 
+  async function refreshHllRecordsKpm() {
+    setEnrichingHllRecords(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/hllrecords/enrich", { method: "POST" });
+      const payload = await parseResponse<{ summary: { checked: number; updated: number; failed: number } }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to refresh HLLRecords KPM.");
+      }
+
+      setNotice(
+        `HLLRecords refresh checked ${payload.summary.checked} players. Updated: ${payload.summary.updated}. Failed: ${payload.summary.failed}.`,
+      );
+      await loadDashboard();
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : "Failed to refresh HLLRecords KPM.");
+    } finally {
+      setEnrichingHllRecords(false);
+    }
+  }
+
   async function scanGame(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -580,7 +605,12 @@ export function TalentDashboard() {
       </section>
 
       <section className="surface p-4">
-        <h2 className="text-lg font-semibold">Spotted players</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Spotted players</h2>
+          <button className="px-4 py-2" type="button" onClick={refreshHllRecordsKpm} disabled={enrichingHllRecords}>
+            {enrichingHllRecords ? "Refreshing..." : "Refresh HLL KPM"}
+          </button>
+        </div>
         <div className="table-wrap mt-4">
           <table className="w-full border-collapse text-left text-sm">
             <thead className="table-head muted">
@@ -633,7 +663,13 @@ export function TalentDashboard() {
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{bestKpm.toFixed(2)}</td>
                       <td className="px-4 py-3" title={player.hllRecordsStatError || undefined}>
-                        {typeof player.hllRecordsKpm180 === "number" ? player.hllRecordsKpm180.toFixed(2) : "-"}
+                        {typeof player.hllRecordsKpm180 === "number" ? (
+                          player.hllRecordsKpm180.toFixed(2)
+                        ) : player.hllRecordsStatError ? (
+                          <span className="text-amber-200">Error</span>
+                        ) : (
+                          <span className="muted">Pending</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">{bestKills}</td>
                       <td className="px-4 py-3">

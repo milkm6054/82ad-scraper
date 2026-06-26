@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { fetchHllRecordStatsBatch, HllRecordStatResult } from "@/lib/hllRecords";
+import { enrichMissingHllRecordsKpm, fetchHllRecordStatsBatch, HllRecordStatResult } from "@/lib/hllRecords";
 
 const ALLOWED_KILL_TYPES = new Set(["infantry", "sniper", "machine_gun"]);
 const MIN_KILLS = 40;
@@ -344,11 +344,11 @@ export async function saveScanResult(serverId: string, scan: ScanGameResult) {
     },
     select: {
       steamId64: true,
-      hllRecordsStatFetchedAt: true,
+      hllRecordsKpm180: true,
     },
   });
   const playersWithStats = new Set(
-    existingPlayers.filter((player) => player.hllRecordsStatFetchedAt).map((player) => player.steamId64),
+    existingPlayers.filter((player) => typeof player.hllRecordsKpm180 === "number").map((player) => player.steamId64),
   );
   const steamIdsNeedingStats = unrosteredPlayers
     .map((player) => player.steamId64)
@@ -557,7 +557,9 @@ export async function runScheduledPoll() {
   });
 
   const summary = await scanAllTrackedServers();
+  const hllRecordsKpm = await enrichMissingHllRecordsKpm(25);
   const finishedAt = new Date();
+  const summaryWithEnrichment = { ...summary, hllRecordsKpm };
 
   await prisma.pollState.upsert({
     where: { id: "global" },
@@ -567,17 +569,17 @@ export async function runScheduledPoll() {
       lastStartedAt: startedAt,
       lastFinishedAt: finishedAt,
       nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
-      lastSummary: summary as unknown as Prisma.InputJsonValue,
+      lastSummary: summaryWithEnrichment as unknown as Prisma.InputJsonValue,
     },
     update: {
       intervalMinutes,
       lastFinishedAt: finishedAt,
       nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
-      lastSummary: summary as unknown as Prisma.InputJsonValue,
+      lastSummary: summaryWithEnrichment as unknown as Prisma.InputJsonValue,
     },
   });
 
-  return summary;
+  return summaryWithEnrichment;
 }
 
 export async function createTrackedServer({ name, baseUrl }: { name: string; baseUrl: string }) {
