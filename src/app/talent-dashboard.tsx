@@ -1185,7 +1185,6 @@ export function TalentDashboard() {
                 <th className="px-4 py-3">Messaged</th>
                 <th className="px-4 py-3">Times spotted</th>
                 <th className="px-4 py-3">Best KPM</th>
-                <th className="px-4 py-3">HLL KPM</th>
                 <th className="px-4 py-3">Best kills</th>
                 <th className="px-4 py-3">Profile</th>
               </tr>
@@ -1198,9 +1197,6 @@ export function TalentDashboard() {
                   <td className="px-4 py-3">{formatDateTime(player.contactedAt)}</td>
                   <td className="px-4 py-3">{player.timesSpotted}</td>
                   <td className="px-4 py-3">{getBestKpm(player).toFixed(2)}</td>
-                  <td className="px-4 py-3">
-                    {hasValidHllKpm(player) ? player.hllRecordsKpm180.toFixed(2) : "Pending"}
-                  </td>
                   <td className="px-4 py-3">{getBestKills(player)}</td>
                   <td className="px-4 py-3">
                     <a className="subtle-link underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
@@ -1211,7 +1207,7 @@ export function TalentDashboard() {
               ))}
               {!loading && data.contactedPlayers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center muted">
+                  <td colSpan={7} className="px-4 py-8 text-center muted">
                     No contacted players yet.
                   </td>
                 </tr>
@@ -1433,7 +1429,6 @@ export function TalentDashboard() {
                     <th className="px-4 py-3">Steam ID</th>
                     <th className="px-4 py-3">Times spotted</th>
                     <th className="px-4 py-3">Best KPM</th>
-                    <th className="px-4 py-3">HLL KPM</th>
                     <th className="px-4 py-3">Best kills</th>
                     <th className="px-4 py-3">Profile</th>
                   </tr>
@@ -1446,11 +1441,6 @@ export function TalentDashboard() {
                       <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
-                      <td className="px-4 py-3">
-                        {typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
-                          ? player.hllRecordsKpm180.toFixed(2)
-                          : "Pending"}
-                      </td>
                       <td className="px-4 py-3">{player.bestKills}</td>
                       <td className="px-4 py-3">
                         {player.hllRecordsUrl ? (
@@ -1465,7 +1455,7 @@ export function TalentDashboard() {
                   ))}
                   {!loading82ad && eightySecondData.rosteredPlayers.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center muted">
+                      <td colSpan={7} className="px-4 py-8 text-center muted">
                         No rostered players matched the 82AD thresholds.
                       </td>
                     </tr>
@@ -1489,7 +1479,6 @@ export function TalentDashboard() {
                     <th className="px-4 py-3">Messaged</th>
                     <th className="px-4 py-3">Times spotted</th>
                     <th className="px-4 py-3">Best KPM</th>
-                    <th className="px-4 py-3">HLL KPM</th>
                     <th className="px-4 py-3">Best kills</th>
                     <th className="px-4 py-3">Profile</th>
                   </tr>
@@ -1502,11 +1491,6 @@ export function TalentDashboard() {
                       <td className="px-4 py-3">{formatDateTime(player.contactedAt)}</td>
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
-                      <td className="px-4 py-3">
-                        {typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
-                          ? player.hllRecordsKpm180.toFixed(2)
-                          : "Pending"}
-                      </td>
                       <td className="px-4 py-3">{player.bestKills}</td>
                       <td className="px-4 py-3">
                         {player.hllRecordsUrl ? (
@@ -1521,7 +1505,7 @@ export function TalentDashboard() {
                   ))}
                   {!loading82ad && eightySecondData.contactedPlayers.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center muted">
+                      <td colSpan={7} className="px-4 py-8 text-center muted">
                         No contacted players yet.
                       </td>
                     </tr>
