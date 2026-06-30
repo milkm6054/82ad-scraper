@@ -60,6 +60,11 @@ export async function GET() {
     );
     const hllRecordsBatchSize = Number(process.env.HLLRECORDS_REFRESH_LIMIT || 5);
     const hllRecordsIntervalMinutes = Number(process.env.HLLRECORDS_KPM_INTERVAL_MINUTES || 30);
+    const storedSummary =
+      pollState?.lastSummary && typeof pollState.lastSummary === "object" && !Array.isArray(pollState.lastSummary)
+        ? (pollState.lastSummary as { trackedServers?: unknown })
+        : null;
+    const trackedServerSummary = storedSummary?.trackedServers ?? pollState?.lastSummary ?? null;
 
     return NextResponse.json({
       servers: servers.map((server) => ({
@@ -74,7 +79,7 @@ export async function GET() {
         lastStartedAt: pollState?.lastStartedAt?.toISOString() ?? null,
         lastFinishedAt: pollState?.lastFinishedAt?.toISOString() ?? null,
         nextRunAt: pollState?.nextRunAt?.toISOString() ?? null,
-        lastSummary: pollState?.lastSummary ?? null,
+        lastSummary: trackedServerSummary,
       },
       hllRecordsKpm,
       hllRecordsKpmQueue: {

@@ -7,7 +7,7 @@ const MIN_KILLS = 40;
 const MIN_KPM = 1.0;
 const MIN_ALLOWED_SHARE = 0.70;
 const DEFAULT_POLL_INTERVAL_MINUTES = 120;
-const DEFAULT_82AD_SCAN_PAGE_LIMIT = 40;
+const DEFAULT_82AD_SCAN_PAGE_LIMIT = 100;
 const DEFAULT_82AD_SERVER_CONFIG = [
   { name: "82AD Server 1", baseUrl: "https://server1.82nd.gg" },
   { name: "82AD Server 2", baseUrl: "https://server2.82nd.gg" },
@@ -153,6 +153,11 @@ export type EightySecondDashboardSummary = {
   servers: EightySecondServerSummary[];
   players: EightySecondPlayerSummary[];
   rosteredPlayers: EightySecondRosteredPlayerSummary[];
+};
+
+type StoredPollSummary = {
+  trackedServers?: AllServerScanSummary;
+  eightySecondDashboard?: EightySecondDashboardSummary;
 };
 
 const TALENT_SPOTTER_CRITERIA: ScanCriteria = {
@@ -812,6 +817,66 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
   };
 }
 
+export async function loadCachedEightySecondDashboard() {
+  const pollState = await prisma.pollState.findUnique({
+    where: { id: "global" },
+    select: {
+      lastSummary: true,
+    },
+  });
+
+  const summary =
+    pollState?.lastSummary && typeof pollState.lastSummary === "object" && !Array.isArray(pollState.lastSummary)
+      ? (pollState.lastSummary as StoredPollSummary)
+      : null;
+
+  return summary?.eightySecondDashboard ?? null;
+}
+
+export async function refreshAndStoreEightySecondDashboard(limit?: number) {
+  const dashboard = await loadEightySecondDashboard(limit);
+  const existingPollState = await prisma.pollState.findUnique({
+    where: { id: "global" },
+    select: {
+      intervalMinutes: true,
+      lastStartedAt: true,
+      lastFinishedAt: true,
+      nextRunAt: true,
+      lastSummary: true,
+    },
+  });
+
+  const existingSummary =
+    existingPollState?.lastSummary &&
+    typeof existingPollState.lastSummary === "object" &&
+    !Array.isArray(existingPollState.lastSummary)
+      ? (existingPollState.lastSummary as StoredPollSummary)
+      : {};
+
+  await prisma.pollState.upsert({
+    where: { id: "global" },
+    create: {
+      id: "global",
+      intervalMinutes: existingPollState?.intervalMinutes ?? getPollIntervalMinutes(),
+      lastStartedAt: existingPollState?.lastStartedAt ?? null,
+      lastFinishedAt: existingPollState?.lastFinishedAt ?? null,
+      nextRunAt: existingPollState?.nextRunAt ?? null,
+      lastSummary: {
+        ...existingSummary,
+        eightySecondDashboard: dashboard,
+      } as unknown as Prisma.InputJsonValue,
+    },
+    update: {
+      lastSummary: {
+        ...existingSummary,
+        eightySecondDashboard: dashboard,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return dashboard;
+}
+
 export async function scanAllTrackedServers(limit?: number): Promise<AllServerScanSummary> {
   const servers = await prisma.trackedServer.findMany({
     orderBy: [{ createdAt: "asc" }],
@@ -862,7 +927,8 @@ export async function runScheduledPoll() {
     },
   });
 
-  const summary = await scanAllTrackedServers();
+  const trackedServerSummary = await scanAllTrackedServers();
+  const eightySecondDashboard = await loadEightySecondDashboard();
   const finishedAt = new Date();
 
   await prisma.pollState.upsert({
@@ -873,17 +939,23 @@ export async function runScheduledPoll() {
       lastStartedAt: startedAt,
       lastFinishedAt: finishedAt,
       nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
-      lastSummary: summary as unknown as Prisma.InputJsonValue,
+      lastSummary: {
+        trackedServers: trackedServerSummary,
+        eightySecondDashboard,
+      } as unknown as Prisma.InputJsonValue,
     },
     update: {
       intervalMinutes,
       lastFinishedAt: finishedAt,
       nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
-      lastSummary: summary as unknown as Prisma.InputJsonValue,
+      lastSummary: {
+        trackedServers: trackedServerSummary,
+        eightySecondDashboard,
+      } as unknown as Prisma.InputJsonValue,
     },
   });
 
-  return summary;
+  return trackedServerSummary;
 }
 
 export async function createTrackedServer({ name, baseUrl }: { name: string; baseUrl: string }) {

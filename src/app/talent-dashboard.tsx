@@ -123,8 +123,6 @@ type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRec
 type EightySecondSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills";
 type SortDirection = "asc" | "desc";
 type DashboardTab = "talent" | "82ad";
-const EIGHTYSECOND_AUTO_REFRESH_MS = 2 * 60 * 60 * 1000;
-
 async function parseResponse<T>(response: Response): Promise<T & { error?: string }> {
   const text = await response.text();
   if (!text.trim()) {
@@ -359,22 +357,6 @@ export function TalentDashboard() {
       cancelled = true;
     };
   }, [activeTab, eightySecondData.players.length, eightySecondData.servers.length, loadEightySecondDashboard]);
-
-  useEffect(() => {
-    if (activeTab !== "82ad") {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      void loadEightySecondDashboard().catch((loadError) => {
-        setEightySecondError(
-          loadError instanceof Error ? loadError.message : "Failed to auto-refresh 82AD server stats.",
-        );
-      });
-    }, EIGHTYSECOND_AUTO_REFRESH_MS);
-
-    return () => window.clearInterval(interval);
-  }, [activeTab, loadEightySecondDashboard]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
@@ -621,7 +603,23 @@ export function TalentDashboard() {
     setEightySecondError("");
 
     try {
-      await loadEightySecondDashboard();
+      const response = await fetch("/api/82ad-dashboard?refresh=1", { cache: "no-store" });
+      const payload = await parseResponse<EightySecondDashboardResponse>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to refresh 82AD server stats.");
+      }
+
+      setEightySecondData({
+        criteria: payload.criteria || {
+          minKillsExclusive: 30,
+          minKpmInclusive: 0.75,
+          minDurationSeconds: 1800,
+        },
+        servers: payload.servers || [],
+        players: payload.players || [],
+        rosteredPlayers: payload.rosteredPlayers || [],
+      });
     } catch (refreshError) {
       setEightySecondError(
         refreshError instanceof Error ? refreshError.message : "Failed to refresh 82AD server stats.",
@@ -1043,7 +1041,9 @@ export function TalentDashboard() {
                   </span>
                   .
                 </p>
-                <p className="muted mt-1 text-xs">Looks back across the last 40 games per server and auto-refreshes every 2 hours while this tab is open.</p>
+                <p className="muted mt-1 text-xs">
+                  Background polling keeps this updated every 2 hours even with the tab closed, and it looks back across the last 100 games per server.
+                </p>
               </div>
               <button
                 className="px-4 py-2"
