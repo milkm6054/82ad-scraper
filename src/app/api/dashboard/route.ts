@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { loadActiveRosterSteamIds } from "@/lib/scanner";
+import { loadActiveRosterSteamIds, loadExcludedSteamIds } from "@/lib/scanner";
 
 export const dynamic = "force-dynamic";
 
@@ -42,8 +42,13 @@ export async function GET() {
       }),
     ]);
 
-    const activeRosterSteamIds = await loadActiveRosterSteamIds(players.map((player) => player.steamId64));
-    const freePlayers = players.filter((player) => !activeRosterSteamIds.has(player.steamId64));
+    const [activeRosterSteamIds, excludedSteamIds] = await Promise.all([
+      loadActiveRosterSteamIds(players.map((player) => player.steamId64)),
+      loadExcludedSteamIds(players.map((player) => player.steamId64)),
+    ]);
+    const freePlayers = players.filter(
+      (player) => !activeRosterSteamIds.has(player.steamId64) && !excludedSteamIds.has(player.steamId64),
+    );
     const hllRecordsKpm = freePlayers.reduce(
       (counts, player) => {
         if (typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0) {

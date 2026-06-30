@@ -387,6 +387,18 @@ export async function loadActiveRosterSteamIds(steamIds: string[]) {
   return new Set(rosteredPlayers.map((player) => player.steamId64));
 }
 
+export async function loadExcludedSteamIds(steamIds?: string[]) {
+  const uniqueSteamIds = Array.from(new Set((steamIds ?? []).filter(Boolean)));
+  const excludedPlayers = await prisma.excludedPlayer.findMany({
+    where: uniqueSteamIds.length > 0 ? { steamId64: { in: uniqueSteamIds } } : undefined,
+    select: {
+      steamId64: true,
+    },
+  });
+
+  return new Set(excludedPlayers.map((player) => player.steamId64));
+}
+
 async function loadActiveRosterPlayersWithTeams(steamIds: string[]) {
   const uniqueSteamIds = Array.from(new Set(steamIds.filter(Boolean)));
   if (uniqueSteamIds.length === 0) {
@@ -488,8 +500,14 @@ export async function saveScanResult(serverId: string, scan: ScanGameResult) {
   });
 
   let savedSightings = 0;
-  const activeRosterSteamIds = await loadActiveRosterSteamIds(scan.qualifiedPlayers.map((player) => player.steamId64));
-  const unrosteredPlayers = scan.qualifiedPlayers.filter((player) => !activeRosterSteamIds.has(player.steamId64));
+  const candidateSteamIds = scan.qualifiedPlayers.map((player) => player.steamId64);
+  const [activeRosterSteamIds, excludedSteamIds] = await Promise.all([
+    loadActiveRosterSteamIds(candidateSteamIds),
+    loadExcludedSteamIds(candidateSteamIds),
+  ]);
+  const unrosteredPlayers = scan.qualifiedPlayers.filter(
+    (player) => !activeRosterSteamIds.has(player.steamId64) && !excludedSteamIds.has(player.steamId64),
+  );
   const existingPlayers = await prisma.spottedPlayer.findMany({
     where: {
       steamId64: {
@@ -762,10 +780,18 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
     }
   }
 
-  const rosteredPlayerTeamBySteamId = await loadActiveRosterPlayersWithTeams(Array.from(playersById.keys()));
+  const allSteamIds = Array.from(playersById.keys());
+  const [rosteredPlayerTeamBySteamId, excludedSteamIds] = await Promise.all([
+    loadActiveRosterPlayersWithTeams(allSteamIds),
+    loadExcludedSteamIds(allSteamIds),
+  ]);
   const unrosteredPlayers = new Map<string, EightySecondPlayerSummary>();
 
   for (const [steamId64, player] of playersById.entries()) {
+    if (excludedSteamIds.has(steamId64)) {
+      continue;
+    }
+
     const teamName = rosteredPlayerTeamBySteamId.get(steamId64);
     if (!teamName) {
       unrosteredPlayers.set(steamId64, player);

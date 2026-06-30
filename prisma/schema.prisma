@@ -66,6 +66,17 @@ model SpottedPlayer {
   @@map("SpottedPlayer")
 }
 
+model ExcludedPlayer {
+  id        String   @id @default(cuid())
+  steamId64 String   @unique
+  name      String
+  reason    String   @default("CHEATER")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("ExcludedPlayer")
+}
+
 model PlayerSighting {
   id                 String        @id @default(cuid())
   spottedPlayerId    String

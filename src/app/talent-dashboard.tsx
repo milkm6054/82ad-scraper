@@ -249,6 +249,7 @@ export function TalentDashboard() {
   const [polling, setPolling] = useState(false);
   const [enrichingHllRecords, setEnrichingHllRecords] = useState(false);
   const [retryingHllRecords, setRetryingHllRecords] = useState(false);
+  const [markingCheaterId, setMarkingCheaterId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loading82ad, setLoading82ad] = useState(false);
   const [refreshing82ad, setRefreshing82ad] = useState(false);
@@ -661,6 +662,64 @@ export function TalentDashboard() {
     }
   }
 
+  async function markAsCheater(player: { steamId64: string; name: string }, source: DashboardTab) {
+    const confirmed = window.confirm(`Mark ${player.name} as a cheater and hide them from future results?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setMarkingCheaterId(player.steamId64);
+    setError("");
+    setEightySecondError("");
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/cheaters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(player),
+      });
+      const payload = await parseResponse<{ excludedPlayer: { steamId64: string } }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to mark player as cheater.");
+      }
+
+      if (source === "talent") {
+        await loadDashboard();
+      } else {
+        const refreshResponse = await fetch("/api/82ad-dashboard?refresh=1", { cache: "no-store" });
+        const refreshPayload = await parseResponse<EightySecondDashboardResponse>(refreshResponse);
+
+        if (!refreshResponse.ok) {
+          throw new Error(refreshPayload.error || "Failed to refresh 82AD server stats.");
+        }
+
+        setEightySecondData({
+          criteria: refreshPayload.criteria || {
+            minKillsExclusive: 30,
+            minKpmInclusive: 0.75,
+            minDurationSeconds: 1800,
+          },
+          servers: refreshPayload.servers || [],
+          players: refreshPayload.players || [],
+          rosteredPlayers: refreshPayload.rosteredPlayers || [],
+        });
+      }
+
+      setNotice(`${player.name} marked as cheater and excluded from future results.`);
+    } catch (markError) {
+      const message = markError instanceof Error ? markError.message : "Failed to mark player as cheater.";
+      if (source === "talent") {
+        setError(message);
+      } else {
+        setEightySecondError(message);
+      }
+    } finally {
+      setMarkingCheaterId(null);
+    }
+  }
+
   function togglePlayer(playerId: string) {
     setExpandedPlayerIds((current) => {
       const next = new Set(current);
@@ -937,7 +996,7 @@ export function TalentDashboard() {
                   </button>
                 </th>
                 <th className="px-4 py-3">Profile</th>
-                <th className="px-4 py-3"></th>
+                <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -971,9 +1030,19 @@ export function TalentDashboard() {
                         </a>
                       </td>
                       <td className="px-4 py-3">
-                        <button className="px-3 py-1.5" type="button" onClick={() => togglePlayer(player.id)}>
-                          {expanded ? "Hide" : "Show"}
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button className="px-3 py-1.5" type="button" onClick={() => togglePlayer(player.id)}>
+                            {expanded ? "Hide" : "Show"}
+                          </button>
+                          <button
+                            className="danger-button px-3 py-1.5"
+                            type="button"
+                            onClick={() => markAsCheater({ steamId64: player.steamId64, name: player.name }, "talent")}
+                            disabled={markingCheaterId === player.steamId64}
+                          >
+                            {markingCheaterId === player.steamId64 ? "Marking..." : "Mark cheater"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                     {expanded ? (
@@ -1110,7 +1179,7 @@ export function TalentDashboard() {
                       </button>
                     </th>
                     <th className="px-4 py-3">Profile</th>
-                    <th className="px-4 py-3"></th>
+                    <th className="px-4 py-3">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1135,9 +1204,19 @@ export function TalentDashboard() {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <button className="px-3 py-1.5" type="button" onClick={() => toggleEightySecondPlayer(player.id)}>
-                              {expanded ? "Hide" : "Show"}
-                            </button>
+                            <div className="flex flex-wrap gap-2">
+                              <button className="px-3 py-1.5" type="button" onClick={() => toggleEightySecondPlayer(player.id)}>
+                                {expanded ? "Hide" : "Show"}
+                              </button>
+                              <button
+                                className="danger-button px-3 py-1.5"
+                                type="button"
+                                onClick={() => markAsCheater({ steamId64: player.steamId64, name: player.name }, "82ad")}
+                                disabled={markingCheaterId === player.steamId64}
+                              >
+                                {markingCheaterId === player.steamId64 ? "Marking..." : "Mark cheater"}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                         {expanded ? (
