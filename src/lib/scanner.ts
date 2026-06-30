@@ -423,6 +423,37 @@ export async function loadContactedPlayers(steamIds?: string[]) {
   );
 }
 
+export async function loadStoredHllRecordsKpmBySteamId(steamIds: string[]) {
+  const uniqueSteamIds = Array.from(new Set(steamIds.filter(Boolean)));
+  if (uniqueSteamIds.length === 0) {
+    return new Map<string, { hllRecordsKpm180: number | null; hllRecordsUrl: string | null }>();
+  }
+
+  const players = await prisma.spottedPlayer.findMany({
+    where: {
+      steamId64: {
+        in: uniqueSteamIds,
+      },
+    },
+    select: {
+      steamId64: true,
+      hllRecordsKpm180: true,
+      hllRecordsUrl: true,
+    },
+  });
+
+  return new Map(
+    players.map((player) => [
+      player.steamId64,
+      {
+        hllRecordsKpm180:
+          typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0 ? player.hllRecordsKpm180 : null,
+        hllRecordsUrl: player.hllRecordsUrl,
+      },
+    ]),
+  );
+}
+
 async function loadOrFetchHllRecordsKpmBySteamId(steamIds: string[]) {
   const uniqueSteamIds = Array.from(new Set(steamIds.filter((steamId) => /^\d{17}$/.test(steamId))));
   const kpmBySteamId = new Map<string, number | null>();

@@ -125,7 +125,7 @@ type EightySecondDashboardResponse = {
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
-type EightySecondSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills";
+type EightySecondSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
 type SortDirection = "asc" | "desc";
 type DashboardTab = "talent" | "82ad";
 async function parseResponse<T>(response: Response): Promise<T & { error?: string }> {
@@ -430,12 +430,20 @@ export function TalentDashboard() {
       const leftValue =
         eightySecondSortKey === "timesSpotted"
           ? left.timesSpotted
+          : eightySecondSortKey === "hllRecordsKpm180"
+            ? typeof left.hllRecordsKpm180 === "number" && left.hllRecordsKpm180 > 0
+              ? left.hllRecordsKpm180
+              : -1
           : eightySecondSortKey === "bestKpm"
             ? left.bestKpm
             : left.bestKills;
       const rightValue =
         eightySecondSortKey === "timesSpotted"
           ? right.timesSpotted
+          : eightySecondSortKey === "hllRecordsKpm180"
+            ? typeof right.hllRecordsKpm180 === "number" && right.hllRecordsKpm180 > 0
+              ? right.hllRecordsKpm180
+              : -1
           : eightySecondSortKey === "bestKpm"
             ? right.bestKpm
             : right.bestKills;
@@ -1299,7 +1307,13 @@ export function TalentDashboard() {
                       </button>
                     </th>
                     <th className="px-4 py-3">
-                      HLL KPM
+                      <button
+                        className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted"
+                        type="button"
+                        onClick={() => updateEightySecondSort("hllRecordsKpm180")}
+                      >
+                        HLL KPM{getSortLabel("hllRecordsKpm180", eightySecondSortKey, eightySecondSortDirection)}
+                      </button>
                     </th>
                     <th className="px-4 py-3">
                       <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updateEightySecondSort("bestKills")}>
