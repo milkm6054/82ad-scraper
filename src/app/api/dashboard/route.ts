@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { loadActiveRosterSteamIds, loadExcludedSteamIds } from "@/lib/scanner";
+import { loadActiveRosterSteamIds, loadContactedPlayers, loadExcludedSteamIds } from "@/lib/scanner";
 
 export const dynamic = "force-dynamic";
 
@@ -42,9 +42,10 @@ export async function GET() {
       }),
     ]);
 
-    const [activeRosterSteamIds, excludedSteamIds] = await Promise.all([
+    const [activeRosterSteamIds, excludedSteamIds, contactedPlayers] = await Promise.all([
       loadActiveRosterSteamIds(players.map((player) => player.steamId64)),
       loadExcludedSteamIds(players.map((player) => player.steamId64)),
+      loadContactedPlayers(players.map((player) => player.steamId64)),
     ]);
     const freePlayers = players.filter(
       (player) => !activeRosterSteamIds.has(player.steamId64) && !excludedSteamIds.has(player.steamId64),
@@ -102,6 +103,7 @@ export async function GET() {
         hllRecordsKpm180: player.hllRecordsKpm180,
         hllRecordsStatError: player.hllRecordsStatError,
         hllRecordsStatFetchedAt: player.hllRecordsStatFetchedAt?.toISOString() ?? null,
+        contactedAt: contactedPlayers.get(player.steamId64)?.contactedAt?.toISOString() ?? null,
         timesSpotted: player._count.sightings,
         sightings: player.sightings.map((sighting) => ({
           id: sighting.id,
@@ -122,6 +124,37 @@ export async function GET() {
           },
         })),
       })),
+      contactedPlayers: freePlayers
+        .filter((player) => contactedPlayers.has(player.steamId64))
+        .map((player) => ({
+          id: player.id,
+          name: player.name,
+          steamId64: player.steamId64,
+          hllRecordsUrl: player.hllRecordsUrl,
+          hllRecordsKpm180: player.hllRecordsKpm180,
+          hllRecordsStatError: player.hllRecordsStatError,
+          hllRecordsStatFetchedAt: player.hllRecordsStatFetchedAt?.toISOString() ?? null,
+          contactedAt: contactedPlayers.get(player.steamId64)?.contactedAt?.toISOString() ?? null,
+          timesSpotted: player._count.sightings,
+          sightings: player.sightings.map((sighting) => ({
+            id: sighting.id,
+            kills: sighting.kills,
+            kpm: sighting.kpm,
+            allowedKills: sighting.allowedKills,
+            allowedKillPercent: sighting.allowedKillPercent,
+            killsByType: sighting.killsByType,
+            weapons: sighting.weapons,
+            game: {
+              id: sighting.processedGame.id,
+              externalGameId: sighting.processedGame.externalGameId,
+              gameLink: sighting.processedGame.gameLink,
+              mapName: sighting.processedGame.mapName,
+              durationSeconds: sighting.processedGame.durationSeconds,
+              startedAt: sighting.processedGame.startedAt?.toISOString() ?? null,
+              serverName: sighting.processedGame.server.name,
+            },
+          })),
+        })),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load dashboard.";

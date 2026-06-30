@@ -35,6 +35,7 @@ type PlayerRow = {
   hllRecordsKpm180: number | null;
   hllRecordsStatError: string | null;
   hllRecordsStatFetchedAt: string | null;
+  contactedAt: string | null;
   timesSpotted: number;
   sightings: SightingRow[];
 };
@@ -60,6 +61,7 @@ type PollState = {
 type DashboardResponse = {
   servers: ServerRow[];
   players: PlayerRow[];
+  contactedPlayers: PlayerRow[];
   pollState: PollState;
   hllRecordsKpm: {
     ready: number;
@@ -98,6 +100,8 @@ type EightySecondPlayerRow = {
   name: string;
   steamId64: string;
   hllRecordsUrl: string | null;
+  hllRecordsKpm180: number | null;
+  contactedAt: string | null;
   timesSpotted: number;
   bestKpm: number;
   bestKills: number;
@@ -117,6 +121,7 @@ type EightySecondDashboardResponse = {
   servers: EightySecondServerRow[];
   players: EightySecondPlayerRow[];
   rosteredPlayers: EightySecondRosteredPlayerRow[];
+  contactedPlayers: EightySecondPlayerRow[];
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
@@ -224,6 +229,7 @@ export function TalentDashboard() {
   const [data, setData] = useState<DashboardResponse>({
     servers: [],
     players: [],
+    contactedPlayers: [],
     hllRecordsKpm: { ready: 0, pending: 0, failed: 0, total: 0 },
     hllRecordsKpmQueue: { batchSize: 5, intervalMinutes: 30 },
     pollState: { intervalMinutes: 120, lastStartedAt: null, lastFinishedAt: null, nextRunAt: null, lastSummary: null },
@@ -237,6 +243,7 @@ export function TalentDashboard() {
     servers: [],
     players: [],
     rosteredPlayers: [],
+    contactedPlayers: [],
   });
   const [serverName, setServerName] = useState("");
   const [serverUrl, setServerUrl] = useState("");
@@ -250,6 +257,7 @@ export function TalentDashboard() {
   const [enrichingHllRecords, setEnrichingHllRecords] = useState(false);
   const [retryingHllRecords, setRetryingHllRecords] = useState(false);
   const [markingCheaterId, setMarkingCheaterId] = useState<string | null>(null);
+  const [markingContactedId, setMarkingContactedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loading82ad, setLoading82ad] = useState(false);
   const [refreshing82ad, setRefreshing82ad] = useState(false);
@@ -273,6 +281,7 @@ export function TalentDashboard() {
     setData({
       servers: payload.servers || [],
       players: payload.players || [],
+      contactedPlayers: payload.contactedPlayers || [],
       hllRecordsKpm: payload.hllRecordsKpm || { ready: 0, pending: 0, failed: 0, total: 0 },
       hllRecordsKpmQueue: payload.hllRecordsKpmQueue || { batchSize: 5, intervalMinutes: 30 },
       pollState: payload.pollState || {
@@ -302,6 +311,7 @@ export function TalentDashboard() {
       servers: payload.servers || [],
       players: payload.players || [],
       rosteredPlayers: payload.rosteredPlayers || [],
+      contactedPlayers: payload.contactedPlayers || [],
     });
   }, []);
 
@@ -620,6 +630,7 @@ export function TalentDashboard() {
         servers: payload.servers || [],
         players: payload.players || [],
         rosteredPlayers: payload.rosteredPlayers || [],
+        contactedPlayers: payload.contactedPlayers || [],
       });
     } catch (refreshError) {
       setEightySecondError(
@@ -704,6 +715,7 @@ export function TalentDashboard() {
           servers: refreshPayload.servers || [],
           players: refreshPayload.players || [],
           rosteredPlayers: refreshPayload.rosteredPlayers || [],
+          contactedPlayers: refreshPayload.contactedPlayers || [],
         });
       }
 
@@ -717,6 +729,60 @@ export function TalentDashboard() {
       }
     } finally {
       setMarkingCheaterId(null);
+    }
+  }
+
+  async function markAsContacted(player: { steamId64: string; name: string }, source: DashboardTab) {
+    setMarkingContactedId(player.steamId64);
+    setError("");
+    setEightySecondError("");
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/contacted", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(player),
+      });
+      const payload = await parseResponse<{ contactedPlayer: { steamId64: string; contactedAt: string } }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to mark player as contacted.");
+      }
+
+      if (source === "talent") {
+        await loadDashboard();
+      } else {
+        const refreshResponse = await fetch("/api/82ad-dashboard?refresh=1", { cache: "no-store" });
+        const refreshPayload = await parseResponse<EightySecondDashboardResponse>(refreshResponse);
+
+        if (!refreshResponse.ok) {
+          throw new Error(refreshPayload.error || "Failed to refresh 82AD server stats.");
+        }
+
+        setEightySecondData({
+          criteria: refreshPayload.criteria || {
+            minKillsExclusive: 30,
+            minKpmInclusive: 0.75,
+            minDurationSeconds: 1800,
+          },
+          servers: refreshPayload.servers || [],
+          players: refreshPayload.players || [],
+          rosteredPlayers: refreshPayload.rosteredPlayers || [],
+          contactedPlayers: refreshPayload.contactedPlayers || [],
+        });
+      }
+
+      setNotice(`${player.name} marked as contacted.`);
+    } catch (markError) {
+      const message = markError instanceof Error ? markError.message : "Failed to mark player as contacted.";
+      if (source === "talent") {
+        setError(message);
+      } else {
+        setEightySecondError(message);
+      }
+    } finally {
+      setMarkingContactedId(null);
     }
   }
 
@@ -1007,8 +1073,13 @@ export function TalentDashboard() {
 
                 return (
                   <Fragment key={player.id}>
-                    <tr className="table-row">
-                      <td className="status-text px-4 py-3 font-semibold">{player.name}</td>
+                    <tr className={`table-row${player.contactedAt ? " contacted-row" : ""}`}>
+                      <td className="px-4 py-3">
+                        <div className="status-text font-semibold">{player.name}</div>
+                        {player.contactedAt ? (
+                          <div className="contacted-note mt-1 text-xs">Messaged {formatDateTime(player.contactedAt)}</div>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{bestKpm.toFixed(2)}</td>
@@ -1033,6 +1104,14 @@ export function TalentDashboard() {
                         <div className="flex flex-wrap gap-2">
                           <button className="px-3 py-1.5" type="button" onClick={() => togglePlayer(player.id)}>
                             {expanded ? "Hide" : "Show"}
+                          </button>
+                          <button
+                            className="px-3 py-1.5"
+                            type="button"
+                            onClick={() => markAsContacted({ steamId64: player.steamId64, name: player.name }, "talent")}
+                            disabled={markingContactedId === player.steamId64}
+                          >
+                            {markingContactedId === player.steamId64 ? "Saving..." : "Mark contacted"}
                           </button>
                           <button
                             className="danger-button px-3 py-1.5"
@@ -1084,6 +1163,56 @@ export function TalentDashboard() {
                 <tr>
                   <td colSpan={8} className="px-4 py-8 text-center muted">
                     No unrostered spotted players yet. Add a server or scan a game to start.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+          </section>
+
+          <section className="surface p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Actively talking to</h2>
+          <p className="muted text-sm">{data.contactedPlayers.length} contacted players</p>
+        </div>
+        <div className="table-wrap mt-4">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead className="table-head muted">
+              <tr>
+                <th className="px-4 py-3">Player</th>
+                <th className="px-4 py-3">Steam ID</th>
+                <th className="px-4 py-3">Messaged</th>
+                <th className="px-4 py-3">Times spotted</th>
+                <th className="px-4 py-3">Best KPM</th>
+                <th className="px-4 py-3">HLL KPM</th>
+                <th className="px-4 py-3">Best kills</th>
+                <th className="px-4 py-3">Profile</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.contactedPlayers.map((player) => (
+                <tr key={player.id} className="table-row contacted-row">
+                  <td className="status-text px-4 py-3 font-semibold">{player.name}</td>
+                  <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
+                  <td className="px-4 py-3">{formatDateTime(player.contactedAt)}</td>
+                  <td className="px-4 py-3">{player.timesSpotted}</td>
+                  <td className="px-4 py-3">{getBestKpm(player).toFixed(2)}</td>
+                  <td className="px-4 py-3">
+                    {hasValidHllKpm(player) ? player.hllRecordsKpm180.toFixed(2) : "Pending"}
+                  </td>
+                  <td className="px-4 py-3">{getBestKills(player)}</td>
+                  <td className="px-4 py-3">
+                    <a className="subtle-link underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
+                      HLLRecords
+                    </a>
+                  </td>
+                </tr>
+              ))}
+              {!loading && data.contactedPlayers.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center muted">
+                    No contacted players yet.
                   </td>
                 </tr>
               ) : null}
@@ -1174,6 +1303,9 @@ export function TalentDashboard() {
                       </button>
                     </th>
                     <th className="px-4 py-3">
+                      HLL KPM
+                    </th>
+                    <th className="px-4 py-3">
                       <button className="border-0 bg-transparent p-0 text-left text-sm font-semibold muted" type="button" onClick={() => updateEightySecondSort("bestKills")}>
                         Best kills{getSortLabel("bestKills", eightySecondSortKey, eightySecondSortDirection)}
                       </button>
@@ -1188,11 +1320,21 @@ export function TalentDashboard() {
 
                     return (
                       <Fragment key={player.id}>
-                        <tr className="table-row">
-                          <td className="status-text px-4 py-3 font-semibold">{player.name}</td>
+                        <tr className={`table-row${player.contactedAt ? " contacted-row" : ""}`}>
+                          <td className="px-4 py-3">
+                            <div className="status-text font-semibold">{player.name}</div>
+                            {player.contactedAt ? (
+                              <div className="contacted-note mt-1 text-xs">Messaged {formatDateTime(player.contactedAt)}</div>
+                            ) : null}
+                          </td>
                           <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                           <td className="px-4 py-3">{player.timesSpotted}</td>
                           <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
+                          <td className="px-4 py-3">
+                            {typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
+                              ? player.hllRecordsKpm180.toFixed(2)
+                              : "Pending"}
+                          </td>
                           <td className="px-4 py-3">{player.bestKills}</td>
                           <td className="px-4 py-3">
                             {player.hllRecordsUrl ? (
@@ -1209,6 +1351,14 @@ export function TalentDashboard() {
                                 {expanded ? "Hide" : "Show"}
                               </button>
                               <button
+                                className="px-3 py-1.5"
+                                type="button"
+                                onClick={() => markAsContacted({ steamId64: player.steamId64, name: player.name }, "82ad")}
+                                disabled={markingContactedId === player.steamId64}
+                              >
+                                {markingContactedId === player.steamId64 ? "Saving..." : "Mark contacted"}
+                              </button>
+                              <button
                                 className="danger-button px-3 py-1.5"
                                 type="button"
                                 onClick={() => markAsCheater({ steamId64: player.steamId64, name: player.name }, "82ad")}
@@ -1221,7 +1371,7 @@ export function TalentDashboard() {
                         </tr>
                         {expanded ? (
                           <tr className="table-row row-muted">
-                            <td colSpan={7} className="px-4 py-4">
+                            <td colSpan={8} className="px-4 py-4">
                               <div className="grid gap-3">
                                 {player.sightings.map((sighting) => (
                                   <div key={sighting.id} className="surface p-3">
@@ -1257,7 +1407,7 @@ export function TalentDashboard() {
                   })}
                   {!loading82ad && eightySecondData.players.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center muted">
+                      <td colSpan={8} className="px-4 py-8 text-center muted">
                         No unrostered players matched the 82AD thresholds yet.
                       </td>
                     </tr>
@@ -1283,6 +1433,7 @@ export function TalentDashboard() {
                     <th className="px-4 py-3">Steam ID</th>
                     <th className="px-4 py-3">Times spotted</th>
                     <th className="px-4 py-3">Best KPM</th>
+                    <th className="px-4 py-3">HLL KPM</th>
                     <th className="px-4 py-3">Best kills</th>
                     <th className="px-4 py-3">Profile</th>
                   </tr>
@@ -1295,6 +1446,11 @@ export function TalentDashboard() {
                       <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                       <td className="px-4 py-3">{player.timesSpotted}</td>
                       <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
+                      <td className="px-4 py-3">
+                        {typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
+                          ? player.hllRecordsKpm180.toFixed(2)
+                          : "Pending"}
+                      </td>
                       <td className="px-4 py-3">{player.bestKills}</td>
                       <td className="px-4 py-3">
                         {player.hllRecordsUrl ? (
@@ -1309,8 +1465,64 @@ export function TalentDashboard() {
                   ))}
                   {!loading82ad && eightySecondData.rosteredPlayers.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center muted">
+                      <td colSpan={8} className="px-4 py-8 text-center muted">
                         No rostered players matched the 82AD thresholds.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="surface p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Actively talking to</h2>
+              <p className="muted text-sm">{eightySecondData.contactedPlayers.length} contacted players</p>
+            </div>
+            <div className="table-wrap mt-4">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="table-head muted">
+                  <tr>
+                    <th className="px-4 py-3">Player</th>
+                    <th className="px-4 py-3">Steam ID</th>
+                    <th className="px-4 py-3">Messaged</th>
+                    <th className="px-4 py-3">Times spotted</th>
+                    <th className="px-4 py-3">Best KPM</th>
+                    <th className="px-4 py-3">HLL KPM</th>
+                    <th className="px-4 py-3">Best kills</th>
+                    <th className="px-4 py-3">Profile</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eightySecondData.contactedPlayers.map((player) => (
+                    <tr key={player.id} className="table-row contacted-row">
+                      <td className="status-text px-4 py-3 font-semibold">{player.name}</td>
+                      <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
+                      <td className="px-4 py-3">{formatDateTime(player.contactedAt)}</td>
+                      <td className="px-4 py-3">{player.timesSpotted}</td>
+                      <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
+                      <td className="px-4 py-3">
+                        {typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
+                          ? player.hllRecordsKpm180.toFixed(2)
+                          : "Pending"}
+                      </td>
+                      <td className="px-4 py-3">{player.bestKills}</td>
+                      <td className="px-4 py-3">
+                        {player.hllRecordsUrl ? (
+                          <a className="subtle-link underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
+                            HLLRecords
+                          </a>
+                        ) : (
+                          <span className="muted">N/A</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {!loading82ad && eightySecondData.contactedPlayers.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-8 text-center muted">
+                        No contacted players yet.
                       </td>
                     </tr>
                   ) : null}

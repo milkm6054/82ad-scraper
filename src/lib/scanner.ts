@@ -117,6 +117,7 @@ type EightySecondPlayerSummary = {
   name: string;
   steamId64: string;
   hllRecordsUrl: string | null;
+  hllRecordsKpm180: number | null;
   timesSpotted: number;
   bestKpm: number;
   bestKills: number;
@@ -129,6 +130,7 @@ type EightySecondRosteredPlayerSummary = {
   steamId64: string;
   teamName: string;
   hllRecordsUrl: string | null;
+  hllRecordsKpm180: number | null;
   timesSpotted: number;
   bestKpm: number;
   bestKills: number;
@@ -397,6 +399,116 @@ export async function loadExcludedSteamIds(steamIds?: string[]) {
   });
 
   return new Set(excludedPlayers.map((player) => player.steamId64));
+}
+
+export async function loadContactedPlayers(steamIds?: string[]) {
+  const uniqueSteamIds = Array.from(new Set((steamIds ?? []).filter(Boolean)));
+  const contactedPlayers = await prisma.contactedPlayer.findMany({
+    where: uniqueSteamIds.length > 0 ? { steamId64: { in: uniqueSteamIds } } : undefined,
+    select: {
+      steamId64: true,
+      name: true,
+      contactedAt: true,
+    },
+  });
+
+  return new Map(
+    contactedPlayers.map((player) => [
+      player.steamId64,
+      {
+        name: player.name,
+        contactedAt: player.contactedAt,
+      },
+    ]),
+  );
+}
+
+async function loadOrFetchHllRecordsKpmBySteamId(steamIds: string[]) {
+  const uniqueSteamIds = Array.from(new Set(steamIds.filter((steamId) => /^\d{17}$/.test(steamId))));
+  const kpmBySteamId = new Map<string, number | null>();
+
+  if (uniqueSteamIds.length === 0) {
+    return kpmBySteamId;
+  }
+
+  const existingPlayers = await prisma.spottedPlayer.findMany({
+    where: {
+      steamId64: {
+        in: uniqueSteamIds,
+      },
+    },
+    select: {
+      steamId64: true,
+      name: true,
+      hllRecordsKpm180: true,
+      hllRecordsStatError: true,
+    },
+  });
+
+  const existingBySteamId = new Map(existingPlayers.map((player) => [player.steamId64, player]));
+  const missingSteamIds = uniqueSteamIds.filter((steamId) => {
+    const existing = existingBySteamId.get(steamId);
+    return !existing || typeof existing.hllRecordsKpm180 !== "number" || existing.hllRecordsKpm180 <= 0;
+  });
+
+  for (const player of existingPlayers) {
+    kpmBySteamId.set(
+      player.steamId64,
+      typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0 ? player.hllRecordsKpm180 : null,
+    );
+  }
+
+  if (missingSteamIds.length === 0) {
+    return kpmBySteamId;
+  }
+
+  const fetchedAt = new Date();
+  let profileStatsBySteamId = new Map<string, HllRecordStatResult | Error>();
+
+  try {
+    profileStatsBySteamId = await fetchHllRecordStatsBatch(missingSteamIds);
+  } catch (error) {
+    const statError = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
+    profileStatsBySteamId = new Map(missingSteamIds.map((steamId) => [steamId, statError]));
+  }
+
+  for (const steamId64 of missingSteamIds) {
+    const profileStats = profileStatsBySteamId.get(steamId64);
+    const statUpdate =
+      profileStats && !(profileStats instanceof Error)
+        ? {
+            hllRecordsKpm180: profileStats.kpm180,
+            hllRecordsStatError: null,
+            hllRecordsStatFetchedAt: fetchedAt,
+          }
+        : {
+            hllRecordsStatError:
+              profileStats instanceof Error
+                ? profileStats.message
+                : "No HLLRecords result returned for this player.",
+            hllRecordsStatFetchedAt: fetchedAt,
+          };
+
+    await prisma.spottedPlayer.upsert({
+      where: { steamId64 },
+      create: {
+        steamId64,
+        name: existingBySteamId.get(steamId64)?.name || steamId64,
+        hllRecordsUrl: `https://hllrecords.com/profiles/${steamId64}`,
+        ...statUpdate,
+      },
+      update: {
+        ...statUpdate,
+      },
+    });
+
+    kpmBySteamId.set(
+      steamId64,
+      profileStats && !(profileStats instanceof Error) ? profileStats.kpm180 : null,
+    );
+  }
+
+  return kpmBySteamId;
 }
 
 async function loadActiveRosterPlayersWithTeams(steamIds: string[]) {
@@ -736,6 +848,7 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
               hllRecordsUrl: /^\d{17}$/.test(player.steamId64)
                 ? `https://hllrecords.com/profiles/${player.steamId64}`
                 : null,
+              hllRecordsKpm180: null,
               timesSpotted: 0,
               bestKpm: 0,
               bestKills: 0,
@@ -781,9 +894,10 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
   }
 
   const allSteamIds = Array.from(playersById.keys());
-  const [rosteredPlayerTeamBySteamId, excludedSteamIds] = await Promise.all([
+  const [rosteredPlayerTeamBySteamId, excludedSteamIds, hllKpmBySteamId] = await Promise.all([
     loadActiveRosterPlayersWithTeams(allSteamIds),
     loadExcludedSteamIds(allSteamIds),
+    loadOrFetchHllRecordsKpmBySteamId(allSteamIds),
   ]);
   const unrosteredPlayers = new Map<string, EightySecondPlayerSummary>();
 
@@ -794,12 +908,14 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
 
     const teamName = rosteredPlayerTeamBySteamId.get(steamId64);
     if (!teamName) {
+      player.hllRecordsKpm180 = hllKpmBySteamId.get(steamId64) ?? null;
       unrosteredPlayers.set(steamId64, player);
       continue;
     }
 
     rosteredPlayersById.set(steamId64, {
       ...player,
+      hllRecordsKpm180: hllKpmBySteamId.get(steamId64) ?? null,
       teamName,
     });
   }
