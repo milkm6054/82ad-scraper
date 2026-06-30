@@ -78,6 +78,11 @@ export type RosteredPlayer = {
   steamId64: string;
 };
 
+type RosteredPlayerWithTeam = {
+  steamId64: string;
+  teamName: string;
+};
+
 type ScanGameResult = {
   gameId: string;
   gameLink: string;
@@ -118,6 +123,18 @@ type EightySecondPlayerSummary = {
   sightings: EightySecondPlayerSighting[];
 };
 
+type EightySecondRosteredPlayerSummary = {
+  id: string;
+  name: string;
+  steamId64: string;
+  teamName: string;
+  hllRecordsUrl: string | null;
+  timesSpotted: number;
+  bestKpm: number;
+  bestKills: number;
+  sightings: EightySecondPlayerSighting[];
+};
+
 type EightySecondServerSummary = {
   name: string;
   baseUrl: string;
@@ -135,6 +152,7 @@ export type EightySecondDashboardSummary = {
   };
   servers: EightySecondServerSummary[];
   players: EightySecondPlayerSummary[];
+  rosteredPlayers: EightySecondRosteredPlayerSummary[];
 };
 
 const TALENT_SPOTTER_CRITERIA: ScanCriteria = {
@@ -362,6 +380,32 @@ export async function loadActiveRosterSteamIds(steamIds: string[]) {
   }
 
   return new Set(rosteredPlayers.map((player) => player.steamId64));
+}
+
+async function loadActiveRosterPlayersWithTeams(steamIds: string[]) {
+  const uniqueSteamIds = Array.from(new Set(steamIds.filter(Boolean)));
+  if (uniqueSteamIds.length === 0) {
+    return new Map<string, string>();
+  }
+
+  let rosteredPlayers: RosteredPlayerWithTeam[];
+  try {
+    rosteredPlayers = await prisma.$queryRaw<RosteredPlayerWithTeam[]>`
+      SELECT DISTINCT p."steamId64", t."name" AS "teamName"
+      FROM "RosterEntry" r
+      INNER JOIN "Player" p ON p."id" = r."playerId"
+      INNER JOIN "Team" t ON t."id" = r."teamId"
+      WHERE r."status" = 'ACTIVE'
+      AND p."steamId64" IN (${Prisma.join(uniqueSteamIds)})
+    `;
+  } catch (error) {
+    throw new Error(
+      "Unable to read HCA roster tables. Point DATABASE_URL at the shared HCA database containing Player, RosterEntry, and Team.",
+      { cause: error },
+    );
+  }
+
+  return new Map(rosteredPlayers.map((player) => [player.steamId64, player.teamName]));
 }
 
 async function scanGameUrlWithCriteria(gameUrl: string, criteria: ScanCriteria): Promise<ScanGameResult> {
@@ -615,6 +659,7 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
   const pageLimit = limit ?? Number(process.env.EIGHTYSECOND_SCAN_PAGE_LIMIT || DEFAULT_82AD_SCAN_PAGE_LIMIT);
   const serverDefinitions = get82adServers();
   const playersById = new Map<string, EightySecondPlayerSummary>();
+  const rosteredPlayersById = new Map<string, EightySecondRosteredPlayerSummary>();
   const serverSummaries: EightySecondServerSummary[] = [];
 
   for (const definition of serverDefinitions) {
@@ -712,7 +757,26 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
     }
   }
 
-  const players = Array.from(playersById.values())
+  const rosteredPlayerTeamBySteamId = await loadActiveRosterPlayersWithTeams(Array.from(playersById.keys()));
+  const unrosteredPlayers = new Map<string, EightySecondPlayerSummary>();
+
+  for (const [steamId64, player] of playersById.entries()) {
+    const teamName = rosteredPlayerTeamBySteamId.get(steamId64);
+    if (!teamName) {
+      unrosteredPlayers.set(steamId64, player);
+      continue;
+    }
+
+    rosteredPlayersById.set(steamId64, {
+      ...player,
+      teamName,
+    });
+  }
+
+  const sortPlayers = <T extends { name: string; bestKpm: number; bestKills: number; sightings: EightySecondPlayerSighting[] }>(
+    players: T[],
+  ) =>
+    players
     .map((player) => ({
       ...player,
       sightings: player.sightings.sort((left, right) => {
@@ -733,6 +797,9 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
       return left.name.localeCompare(right.name);
     });
 
+  const players = sortPlayers(Array.from(unrosteredPlayers.values()));
+  const rosteredPlayers = sortPlayers(Array.from(rosteredPlayersById.values()));
+
   return {
     criteria: {
       minKillsExclusive: EIGHTYSECOND_CRITERIA.minKillsExclusive,
@@ -741,6 +808,7 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
     },
     servers: serverSummaries,
     players,
+    rosteredPlayers,
   };
 }
 

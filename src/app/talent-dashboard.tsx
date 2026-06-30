@@ -104,6 +104,10 @@ type EightySecondPlayerRow = {
   sightings: EightySecondSightingRow[];
 };
 
+type EightySecondRosteredPlayerRow = EightySecondPlayerRow & {
+  teamName: string;
+};
+
 type EightySecondDashboardResponse = {
   criteria: {
     minKillsExclusive: number;
@@ -112,6 +116,7 @@ type EightySecondDashboardResponse = {
   };
   servers: EightySecondServerRow[];
   players: EightySecondPlayerRow[];
+  rosteredPlayers: EightySecondRosteredPlayerRow[];
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
@@ -233,6 +238,7 @@ export function TalentDashboard() {
     },
     servers: [],
     players: [],
+    rosteredPlayers: [],
   });
   const [serverName, setServerName] = useState("");
   const [serverUrl, setServerUrl] = useState("");
@@ -296,6 +302,7 @@ export function TalentDashboard() {
       },
       servers: payload.servers || [],
       players: payload.players || [],
+      rosteredPlayers: payload.rosteredPlayers || [],
     });
   }, []);
 
@@ -1069,7 +1076,9 @@ export function TalentDashboard() {
           <section className="surface p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-lg font-semibold">82AD spotted players</h2>
-              <p className="muted text-sm">{eightySecondData.players.length} players matched the current rules</p>
+              <p className="muted text-sm">
+                {eightySecondData.players.length} unrostered players matched the current rules
+              </p>
             </div>
             <div className="table-wrap mt-4">
               <table className="w-full border-collapse text-left text-sm">
@@ -1170,7 +1179,59 @@ export function TalentDashboard() {
                   {!loading82ad && eightySecondData.players.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-4 py-8 text-center muted">
-                        No players matched the 82AD thresholds yet.
+                        No unrostered players matched the 82AD thresholds yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="surface p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Already on HCA rosters</h2>
+              <p className="muted text-sm">
+                {eightySecondData.rosteredPlayers.length} rostered players matched the 82AD rules
+              </p>
+            </div>
+            <div className="table-wrap mt-4">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="table-head muted">
+                  <tr>
+                    <th className="px-4 py-3">Player</th>
+                    <th className="px-4 py-3">Team</th>
+                    <th className="px-4 py-3">Steam ID</th>
+                    <th className="px-4 py-3">Times spotted</th>
+                    <th className="px-4 py-3">Best KPM</th>
+                    <th className="px-4 py-3">Best kills</th>
+                    <th className="px-4 py-3">Profile</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eightySecondData.rosteredPlayers.map((player) => (
+                    <tr key={player.id} className="table-row">
+                      <td className="status-text px-4 py-3 font-semibold">{player.name}</td>
+                      <td className="px-4 py-3">{player.teamName}</td>
+                      <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
+                      <td className="px-4 py-3">{player.timesSpotted}</td>
+                      <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
+                      <td className="px-4 py-3">{player.bestKills}</td>
+                      <td className="px-4 py-3">
+                        {player.hllRecordsUrl ? (
+                          <a className="subtle-link underline underline-offset-4" href={player.hllRecordsUrl} target="_blank" rel="noreferrer">
+                            HLLRecords
+                          </a>
+                        ) : (
+                          <span className="muted">N/A</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {!loading82ad && eightySecondData.rosteredPlayers.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center muted">
+                        No rostered players matched the 82AD thresholds.
                       </td>
                     </tr>
                   ) : null}
