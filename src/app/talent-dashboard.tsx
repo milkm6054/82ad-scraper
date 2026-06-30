@@ -216,6 +216,24 @@ function getBestKills(player: PlayerRow) {
   return Math.max(...player.sightings.map((sighting) => sighting.kills));
 }
 
+function getEightySecondSortValue(player: EightySecondPlayerRow, key: EightySecondSortKey) {
+  if (key === "timesSpotted") {
+    return player.timesSpotted;
+  }
+
+  if (key === "bestKpm") {
+    return player.bestKpm;
+  }
+
+  if (key === "hllRecordsKpm180") {
+    return typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
+      ? player.hllRecordsKpm180
+      : Number.NEGATIVE_INFINITY;
+  }
+
+  return player.bestKills;
+}
+
 function getSortLabel(key: PlayerSortKey, activeKey: PlayerSortKey, direction: SortDirection) {
   if (key !== activeKey) {
     return "";
@@ -427,26 +445,8 @@ export function TalentDashboard() {
         return eightySecondSortDirection === "asc" ? comparison : -comparison;
       }
 
-      const leftValue =
-        eightySecondSortKey === "timesSpotted"
-          ? left.timesSpotted
-          : eightySecondSortKey === "hllRecordsKpm180"
-            ? typeof left.hllRecordsKpm180 === "number" && left.hllRecordsKpm180 > 0
-              ? left.hllRecordsKpm180
-              : -1
-          : eightySecondSortKey === "bestKpm"
-            ? left.bestKpm
-            : left.bestKills;
-      const rightValue =
-        eightySecondSortKey === "timesSpotted"
-          ? right.timesSpotted
-          : eightySecondSortKey === "hllRecordsKpm180"
-            ? typeof right.hllRecordsKpm180 === "number" && right.hllRecordsKpm180 > 0
-              ? right.hllRecordsKpm180
-              : -1
-          : eightySecondSortKey === "bestKpm"
-            ? right.bestKpm
-            : right.bestKills;
+      const leftValue = getEightySecondSortValue(left, eightySecondSortKey);
+      const rightValue = getEightySecondSortValue(right, eightySecondSortKey);
 
       if (leftValue !== rightValue) {
         return eightySecondSortDirection === "asc" ? leftValue - rightValue : rightValue - leftValue;
