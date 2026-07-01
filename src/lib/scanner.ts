@@ -157,9 +157,9 @@ export type EightySecondDashboardSummary = {
   rosteredPlayers: EightySecondRosteredPlayerSummary[];
 };
 
-type StoredPollSummary = {
-  trackedServers?: AllServerScanSummary;
-  eightySecondDashboard?: EightySecondDashboardSummary;
+type StoredEightySecondState = {
+  dashboard: EightySecondDashboardSummary;
+  seenGameIdsByServer: Record<string, string[]>;
 };
 
 const TALENT_SPOTTER_CRITERIA: ScanCriteria = {
@@ -362,6 +362,69 @@ function get82adServers() {
         baseUrl: normalizeBaseUrl(rawUrl.trim()),
       };
     });
+}
+
+function buildEightySecondPlayerMap(
+  players: Array<EightySecondPlayerSummary | EightySecondRosteredPlayerSummary>,
+) {
+  return new Map(
+    players.map((player) => [
+      player.steamId64,
+      {
+        id: player.id,
+        name: player.name,
+        steamId64: player.steamId64,
+        hllRecordsUrl: player.hllRecordsUrl,
+        hllRecordsKpm180: player.hllRecordsKpm180,
+        timesSpotted: player.timesSpotted,
+        bestKpm: player.bestKpm,
+        bestKills: player.bestKills,
+        sightings: [...player.sightings],
+      } satisfies EightySecondPlayerSummary,
+    ]),
+  );
+}
+
+function mergeEightySecondPlayer(
+  playersById: Map<string, EightySecondPlayerSummary>,
+  serverName: string,
+  scan: ScanGameResult,
+  player: QualifiedPlayer,
+) {
+  const existing =
+    playersById.get(player.steamId64) ??
+    {
+      id: player.steamId64,
+      name: player.name,
+      steamId64: player.steamId64,
+      hllRecordsUrl: /^\d{17}$/.test(player.steamId64) ? `https://hllrecords.com/profiles/${player.steamId64}` : null,
+      hllRecordsKpm180: null,
+      timesSpotted: 0,
+      bestKpm: 0,
+      bestKills: 0,
+      sightings: [],
+    };
+
+  const sightingId = `${serverName}-${scan.gameId}-${player.steamId64}`;
+  if (existing.sightings.some((sighting) => sighting.id === sightingId)) {
+    return;
+  }
+
+  existing.name = player.name;
+  existing.timesSpotted += 1;
+  existing.bestKpm = Math.max(existing.bestKpm, player.kpm);
+  existing.bestKills = Math.max(existing.bestKills, player.kills);
+  existing.sightings.push({
+    id: sightingId,
+    kills: player.kills,
+    kpm: player.kpm,
+    gameLink: scan.gameLink,
+    mapName: scan.mapName,
+    durationSeconds: scan.durationSeconds,
+    startedAt: scan.startedAt?.toISOString() ?? null,
+    serverName,
+  });
+  playersById.set(player.steamId64, existing);
 }
 
 export async function loadActiveRosterSteamIds(steamIds: string[]) {
@@ -870,37 +933,7 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
 
         for (const player of scan.qualifiedPlayers) {
           sightings += 1;
-          const existing =
-            playersById.get(player.steamId64) ??
-            {
-              id: player.steamId64,
-              name: player.name,
-              steamId64: player.steamId64,
-              hllRecordsUrl: /^\d{17}$/.test(player.steamId64)
-                ? `https://hllrecords.com/profiles/${player.steamId64}`
-                : null,
-              hllRecordsKpm180: null,
-              timesSpotted: 0,
-              bestKpm: 0,
-              bestKills: 0,
-              sightings: [],
-            };
-
-          existing.name = player.name;
-          existing.timesSpotted += 1;
-          existing.bestKpm = Math.max(existing.bestKpm, player.kpm);
-          existing.bestKills = Math.max(existing.bestKills, player.kills);
-          existing.sightings.push({
-            id: `${definition.name}-${scan.gameId}-${player.steamId64}`,
-            kills: player.kills,
-            kpm: player.kpm,
-            gameLink: scan.gameLink,
-            mapName: scan.mapName,
-            durationSeconds: scan.durationSeconds,
-            startedAt: scan.startedAt?.toISOString() ?? null,
-            serverName: definition.name,
-          });
-          playersById.set(player.steamId64, existing);
+          mergeEightySecondPlayer(playersById, definition.name, scan, player);
         }
       }
 
@@ -992,7 +1025,7 @@ export async function loadEightySecondDashboard(limit?: number): Promise<EightyS
 
 export async function loadCachedEightySecondDashboard() {
   const pollState = await prisma.pollState.findUnique({
-    where: { id: "global" },
+    where: { id: "eightysecond" },
     select: {
       lastSummary: true,
     },
@@ -1000,49 +1033,194 @@ export async function loadCachedEightySecondDashboard() {
 
   const summary =
     pollState?.lastSummary && typeof pollState.lastSummary === "object" && !Array.isArray(pollState.lastSummary)
-      ? (pollState.lastSummary as StoredPollSummary)
+      ? (pollState.lastSummary as StoredEightySecondState)
       : null;
 
-  return summary?.eightySecondDashboard ?? null;
+  return summary?.dashboard ?? null;
 }
 
 export async function refreshAndStoreEightySecondDashboard(limit?: number) {
-  const dashboard = await loadEightySecondDashboard(limit);
+  const pageLimit = limit ?? Number(process.env.EIGHTYSECOND_SCAN_PAGE_LIMIT || DEFAULT_82AD_SCAN_PAGE_LIMIT);
+  const serverDefinitions = get82adServers();
+  const intervalMinutes = getPollIntervalMinutes();
+  const startedAt = new Date();
   const existingPollState = await prisma.pollState.findUnique({
-    where: { id: "global" },
+    where: { id: "eightysecond" },
     select: {
-      intervalMinutes: true,
-      lastStartedAt: true,
-      lastFinishedAt: true,
-      nextRunAt: true,
       lastSummary: true,
     },
   });
-
-  const existingSummary =
+  const existingState =
     existingPollState?.lastSummary &&
     typeof existingPollState.lastSummary === "object" &&
     !Array.isArray(existingPollState.lastSummary)
-      ? (existingPollState.lastSummary as StoredPollSummary)
-      : {};
+      ? (existingPollState.lastSummary as StoredEightySecondState)
+      : null;
+  const previousDashboard = existingState?.dashboard;
+  const playersById = buildEightySecondPlayerMap([
+    ...(previousDashboard?.players ?? []),
+    ...(previousDashboard?.rosteredPlayers ?? []),
+  ]);
+  const seenGameIdsByServer: Record<string, string[]> = { ...(existingState?.seenGameIdsByServer ?? {}) };
+  const serverSummaries: EightySecondServerSummary[] = [];
+
+  for (const definition of serverDefinitions) {
+    let baseUrl = definition.baseUrl;
+    const seenGameIds = new Set(seenGameIdsByServer[definition.baseUrl] ?? []);
+    const previousServerSummary = previousDashboard?.servers.find((server) => server.baseUrl === definition.baseUrl);
+    let checkedGames = previousServerSummary?.checkedGames ?? seenGameIds.size;
+    let qualifyingGames = previousServerSummary?.qualifyingGames ?? 0;
+    let sightings = previousServerSummary?.sightings ?? 0;
+
+    try {
+      let historyUrl = `${baseUrl}/api/get_scoreboard_maps?page=1&limit=${pageLimit}`;
+      let history: GameHistory;
+
+      try {
+        history = await fetchJson<GameHistory>(historyUrl);
+      } catch (error) {
+        const resolvedBaseUrl = await resolveStatsWrapperBaseUrl(baseUrl);
+        if (resolvedBaseUrl === baseUrl) {
+          throw error;
+        }
+
+        baseUrl = resolvedBaseUrl;
+        historyUrl = `${baseUrl}/api/get_scoreboard_maps?page=1&limit=${pageLimit}`;
+        history = await fetchJson<GameHistory>(historyUrl);
+      }
+
+      if (history.failed) {
+        throw new Error(history.error || `Failed to load game history from ${baseUrl}`);
+      }
+
+      const maps = history.result?.maps ?? [];
+      for (const game of maps) {
+        const externalGameId = String(game.id);
+        if (seenGameIds.has(externalGameId)) {
+          continue;
+        }
+
+        const scan = await scanGameUrlWithCriteria(`${baseUrl}/games/${externalGameId}`, EIGHTYSECOND_CRITERIA);
+        seenGameIds.add(externalGameId);
+
+        if (scan.qualifiedPlayers.length === 0) {
+          continue;
+        }
+
+        qualifyingGames += 1;
+        for (const player of scan.qualifiedPlayers) {
+          sightings += 1;
+          mergeEightySecondPlayer(playersById, definition.name, scan, player);
+        }
+      }
+
+      seenGameIdsByServer[definition.baseUrl] = Array.from(seenGameIds);
+      checkedGames = seenGameIds.size;
+      serverSummaries.push({
+        name: definition.name,
+        baseUrl,
+        checkedGames,
+        qualifyingGames,
+        sightings,
+        error: null,
+      });
+    } catch (error) {
+      serverSummaries.push({
+        name: definition.name,
+        baseUrl,
+        checkedGames,
+        qualifyingGames,
+        sightings,
+        error: error instanceof Error ? error.message : "Failed to load 82AD server stats.",
+      });
+    }
+  }
+
+  const allSteamIds = Array.from(playersById.keys());
+  const [rosteredPlayerTeamBySteamId, excludedSteamIds, hllKpmBySteamId] = await Promise.all([
+    loadActiveRosterPlayersWithTeams(allSteamIds),
+    loadExcludedSteamIds(allSteamIds),
+    loadOrFetchHllRecordsKpmBySteamId(allSteamIds),
+  ]);
+  const unrosteredPlayers = new Map<string, EightySecondPlayerSummary>();
+  const refreshedRosteredPlayersById = new Map<string, EightySecondRosteredPlayerSummary>();
+
+  for (const [steamId64, player] of playersById.entries()) {
+    if (excludedSteamIds.has(steamId64)) {
+      continue;
+    }
+
+    const teamName = rosteredPlayerTeamBySteamId.get(steamId64);
+    if (!teamName) {
+      player.hllRecordsKpm180 = hllKpmBySteamId.get(steamId64) ?? null;
+      unrosteredPlayers.set(steamId64, player);
+      continue;
+    }
+
+    refreshedRosteredPlayersById.set(steamId64, {
+      ...player,
+      hllRecordsKpm180: hllKpmBySteamId.get(steamId64) ?? null,
+      teamName,
+    });
+  }
+
+  const sortPlayers = <T extends { name: string; bestKpm: number; bestKills: number; sightings: EightySecondPlayerSighting[] }>(
+    players: T[],
+  ) =>
+    players
+      .map((player) => ({
+        ...player,
+        sightings: player.sightings.sort((left, right) => {
+          const leftTime = left.startedAt ? new Date(left.startedAt).getTime() : 0;
+          const rightTime = right.startedAt ? new Date(right.startedAt).getTime() : 0;
+          return rightTime - leftTime;
+        }),
+      }))
+      .sort((left, right) => {
+        if (left.bestKpm !== right.bestKpm) {
+          return right.bestKpm - left.bestKpm;
+        }
+
+        if (left.bestKills !== right.bestKills) {
+          return right.bestKills - left.bestKills;
+        }
+
+        return left.name.localeCompare(right.name);
+      });
+
+  const dashboard: EightySecondDashboardSummary = {
+    criteria: {
+      minKillsExclusive: EIGHTYSECOND_CRITERIA.minKillsExclusive,
+      minKpmInclusive: EIGHTYSECOND_CRITERIA.minKpmInclusive,
+      minDurationSeconds: EIGHTYSECOND_CRITERIA.minDurationSeconds ?? 0,
+    },
+    servers: serverSummaries,
+    players: sortPlayers(Array.from(unrosteredPlayers.values())),
+    rosteredPlayers: sortPlayers(Array.from(refreshedRosteredPlayersById.values())),
+  };
+  const finishedAt = new Date();
 
   await prisma.pollState.upsert({
-    where: { id: "global" },
+    where: { id: "eightysecond" },
     create: {
-      id: "global",
-      intervalMinutes: existingPollState?.intervalMinutes ?? getPollIntervalMinutes(),
-      lastStartedAt: existingPollState?.lastStartedAt ?? null,
-      lastFinishedAt: existingPollState?.lastFinishedAt ?? null,
-      nextRunAt: existingPollState?.nextRunAt ?? null,
+      id: "eightysecond",
+      intervalMinutes,
+      lastStartedAt: startedAt,
+      lastFinishedAt: finishedAt,
+      nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
       lastSummary: {
-        ...existingSummary,
-        eightySecondDashboard: dashboard,
+        dashboard,
+        seenGameIdsByServer,
       } as unknown as Prisma.InputJsonValue,
     },
     update: {
+      intervalMinutes,
+      lastStartedAt: startedAt,
+      lastFinishedAt: finishedAt,
+      nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
       lastSummary: {
-        ...existingSummary,
-        eightySecondDashboard: dashboard,
+        dashboard,
+        seenGameIdsByServer,
       } as unknown as Prisma.InputJsonValue,
     },
   });
@@ -1101,7 +1279,7 @@ export async function runScheduledPoll() {
   });
 
   const trackedServerSummary = await scanAllTrackedServers();
-  const eightySecondDashboard = await loadEightySecondDashboard();
+  await refreshAndStoreEightySecondDashboard();
   const finishedAt = new Date();
 
   await prisma.pollState.upsert({
@@ -1114,7 +1292,6 @@ export async function runScheduledPoll() {
       nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
       lastSummary: {
         trackedServers: trackedServerSummary,
-        eightySecondDashboard,
       } as unknown as Prisma.InputJsonValue,
     },
     update: {
@@ -1123,7 +1300,6 @@ export async function runScheduledPoll() {
       nextRunAt: new Date(finishedAt.getTime() + intervalMinutes * 60 * 1000),
       lastSummary: {
         trackedServers: trackedServerSummary,
-        eightySecondDashboard,
       } as unknown as Prisma.InputJsonValue,
     },
   });

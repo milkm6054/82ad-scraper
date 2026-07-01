@@ -122,6 +122,14 @@ type EightySecondDashboardResponse = {
   players: EightySecondPlayerRow[];
   rosteredPlayers: EightySecondRosteredPlayerRow[];
   contactedPlayers: EightySecondPlayerRow[];
+  hllRecordsDebug: {
+    pendingCount: number;
+    currentBatch: Array<{ steamId64: string; name: string }>;
+    queue: Array<{ steamId64: string; name: string }>;
+    status: "idle" | "running";
+    lastStartedAt: string | null;
+    lastFinishedAt: string | null;
+  };
 };
 
 type PlayerSortKey = "name" | "timesSpotted" | "bestKpm" | "bestKills" | "hllRecordsKpm180";
@@ -262,6 +270,14 @@ export function TalentDashboard() {
     players: [],
     rosteredPlayers: [],
     contactedPlayers: [],
+    hllRecordsDebug: {
+      pendingCount: 0,
+      currentBatch: [],
+      queue: [],
+      status: "idle",
+      lastStartedAt: null,
+      lastFinishedAt: null,
+    },
   });
   const [serverName, setServerName] = useState("");
   const [serverUrl, setServerUrl] = useState("");
@@ -330,6 +346,14 @@ export function TalentDashboard() {
       players: payload.players || [],
       rosteredPlayers: payload.rosteredPlayers || [],
       contactedPlayers: payload.contactedPlayers || [],
+      hllRecordsDebug: payload.hllRecordsDebug || {
+        pendingCount: 0,
+        currentBatch: [],
+        queue: [],
+        status: "idle",
+        lastStartedAt: null,
+        lastFinishedAt: null,
+      },
     });
   }, []);
 
@@ -639,6 +663,14 @@ export function TalentDashboard() {
         players: payload.players || [],
         rosteredPlayers: payload.rosteredPlayers || [],
         contactedPlayers: payload.contactedPlayers || [],
+        hllRecordsDebug: payload.hllRecordsDebug || {
+          pendingCount: 0,
+          currentBatch: [],
+          queue: [],
+          status: "idle",
+          lastStartedAt: null,
+          lastFinishedAt: null,
+        },
       });
     } catch (refreshError) {
       setEightySecondError(
@@ -724,6 +756,14 @@ export function TalentDashboard() {
           players: refreshPayload.players || [],
           rosteredPlayers: refreshPayload.rosteredPlayers || [],
           contactedPlayers: refreshPayload.contactedPlayers || [],
+          hllRecordsDebug: refreshPayload.hllRecordsDebug || {
+            pendingCount: 0,
+            currentBatch: [],
+            queue: [],
+            status: "idle",
+            lastStartedAt: null,
+            lastFinishedAt: null,
+          },
         });
       }
 
@@ -778,6 +818,14 @@ export function TalentDashboard() {
           players: refreshPayload.players || [],
           rosteredPlayers: refreshPayload.rosteredPlayers || [],
           contactedPlayers: refreshPayload.contactedPlayers || [],
+          hllRecordsDebug: refreshPayload.hllRecordsDebug || {
+            pendingCount: 0,
+            currentBatch: [],
+            queue: [],
+            status: "idle",
+            lastStartedAt: null,
+            lastFinishedAt: null,
+          },
         });
       }
 
@@ -1246,6 +1294,10 @@ export function TalentDashboard() {
                 <p className="muted mt-1 text-xs">
                   Background polling keeps this updated every 2 hours even with the tab closed, and it looks back across the last 100 games per server.
                 </p>
+                <p className="muted mt-1 text-xs">
+                  HLL KPM left to scrape: {eightySecondData.hllRecordsDebug.pendingCount} | Status: {eightySecondData.hllRecordsDebug.status} | Last batch finished{" "}
+                  {formatDateTime(eightySecondData.hllRecordsDebug.lastFinishedAt)}
+                </p>
               </div>
               <button
                 className="px-4 py-2"
@@ -1272,6 +1324,36 @@ export function TalentDashboard() {
               {!loading82ad && eightySecondData.servers.length === 0 ? (
                 <div className="surface p-4 text-sm muted">No 82AD server data loaded yet.</div>
               ) : null}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="surface p-4">
+                <p className="text-sm font-semibold">Currently being scraped</p>
+                <div className="mt-2 grid gap-2">
+                  {eightySecondData.hllRecordsDebug.currentBatch.length ? (
+                    eightySecondData.hllRecordsDebug.currentBatch.map((player) => (
+                      <p key={player.steamId64} className="muted text-xs">
+                        {player.name} <span className="font-mono">{player.steamId64}</span>
+                      </p>
+                    ))
+                  ) : (
+                    <p className="muted text-xs">No active HLL KPM scrape right now.</p>
+                  )}
+                </div>
+              </div>
+              <div className="surface p-4">
+                <p className="text-sm font-semibold">Queued for HLL KPM</p>
+                <div className="mt-2 grid gap-2">
+                  {eightySecondData.hllRecordsDebug.queue.length ? (
+                    eightySecondData.hllRecordsDebug.queue.map((player) => (
+                      <p key={player.steamId64} className="muted text-xs">
+                        {player.name} <span className="font-mono">{player.steamId64}</span>
+                      </p>
+                    ))
+                  ) : (
+                    <p className="muted text-xs">No queued 82AD players right now.</p>
+                  )}
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1341,7 +1423,9 @@ export function TalentDashboard() {
                           <td className="px-4 py-3">{player.timesSpotted}</td>
                           <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
                           <td className="px-4 py-3">
-                            {typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
+                            {!player.hllRecordsUrl
+                              ? "N/A"
+                              : typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
                               ? player.hllRecordsKpm180.toFixed(2)
                               : "Pending"}
                           </td>

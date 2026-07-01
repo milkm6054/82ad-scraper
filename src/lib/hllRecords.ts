@@ -25,6 +25,23 @@ export type HllRecordStatResult = {
 };
 
 export type HllRecordsKpmMode = "pending" | "failed" | "refresh";
+type HllRecordsQueueItem = {
+  steamId64: string;
+  name: string;
+};
+
+export type HllRecordsDebugState = {
+  status: "idle" | "running";
+  mode: HllRecordsKpmMode;
+  totalPending: number;
+  currentBatch: HllRecordsQueueItem[];
+  queue: HllRecordsQueueItem[];
+  checked: number;
+  updated: number;
+  failed: number;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+};
 
 async function runPythonScraper(args: string[]): Promise<string> {
   const scriptPath = path.join(process.cwd(), "scripts", "fetch_hll_stats.py");
@@ -157,23 +174,183 @@ function getQueueWhere(mode: HllRecordsKpmMode) {
   };
 }
 
-export async function enrichHllRecordsKpm(limit = 25, mode: HllRecordsKpmMode = "pending") {
-  const priorityPlayers = await prisma.spottedPlayer.findMany({
-    where: getQueueWhere(mode),
+function getHllRecordsIntervalMinutes() {
+  const configured = Number(process.env.HLLRECORDS_KPM_INTERVAL_MINUTES || 30);
+  return Number.isFinite(configured) && configured > 0 ? configured : 30;
+}
+
+async function listQueuePlayers(mode: HllRecordsKpmMode, take: number, excludeSteamIds: string[] = []) {
+  return prisma.spottedPlayer.findMany({
+    where: {
+      ...getQueueWhere(mode),
+      ...(excludeSteamIds.length > 0
+        ? {
+            steamId64: {
+              notIn: excludeSteamIds,
+            },
+          }
+        : {}),
+    },
     orderBy: [
       { hllRecordsStatFetchedAt: { sort: "asc", nulls: "first" } },
       { createdAt: "asc" },
     ],
-    take: limit,
+    take,
     select: {
       steamId64: true,
+      name: true,
+    },
+  });
+}
+
+async function countQueuePlayers(mode: HllRecordsKpmMode) {
+  return prisma.spottedPlayer.count({
+    where: getQueueWhere(mode),
+  });
+}
+
+async function saveHllRecordsDebugState({
+  status,
+  mode,
+  currentBatch,
+  queue,
+  checked,
+  updated,
+  failed,
+  startedAt,
+  finishedAt,
+}: {
+  status: "idle" | "running";
+  mode: HllRecordsKpmMode;
+  currentBatch: HllRecordsQueueItem[];
+  queue: HllRecordsQueueItem[];
+  checked: number;
+  updated: number;
+  failed: number;
+  startedAt?: Date | null;
+  finishedAt?: Date | null;
+}) {
+  const intervalMinutes = getHllRecordsIntervalMinutes();
+  const totalPending = await countQueuePlayers("pending");
+
+  await prisma.pollState.upsert({
+    where: { id: "hllrecords" },
+    create: {
+      id: "hllrecords",
+      intervalMinutes,
+      lastStartedAt: startedAt ?? null,
+      lastFinishedAt: finishedAt ?? null,
+      nextRunAt: new Date((finishedAt ?? startedAt ?? new Date()).getTime() + intervalMinutes * 60 * 1000),
+      lastSummary: {
+        status,
+        mode,
+        totalPending,
+        currentBatch,
+        queue,
+        checked,
+        updated,
+        failed,
+      },
+    },
+    update: {
+      intervalMinutes,
+      lastStartedAt: startedAt ?? undefined,
+      lastFinishedAt: finishedAt ?? undefined,
+      nextRunAt: new Date((finishedAt ?? startedAt ?? new Date()).getTime() + intervalMinutes * 60 * 1000),
+      lastSummary: {
+        status,
+        mode,
+        totalPending,
+        currentBatch,
+        queue,
+        checked,
+        updated,
+        failed,
+      },
+    },
+  });
+}
+
+export async function loadHllRecordsDebugState(): Promise<HllRecordsDebugState> {
+  const state = await prisma.pollState.findUnique({
+    where: { id: "hllrecords" },
+    select: {
+      lastStartedAt: true,
+      lastFinishedAt: true,
+      lastSummary: true,
     },
   });
 
+  const summary =
+    state?.lastSummary && typeof state.lastSummary === "object" && !Array.isArray(state.lastSummary)
+      ? (state.lastSummary as Record<string, unknown>)
+      : null;
+
+  const toQueueItems = (value: unknown): HllRecordsQueueItem[] =>
+    Array.isArray(value)
+      ? value
+          .map((item) =>
+            item && typeof item === "object" && !Array.isArray(item)
+              ? {
+                  steamId64:
+                    typeof (item as Record<string, unknown>).steamId64 === "string"
+                      ? ((item as Record<string, unknown>).steamId64 as string)
+                      : "",
+                  name:
+                    typeof (item as Record<string, unknown>).name === "string"
+                      ? ((item as Record<string, unknown>).name as string)
+                      : "",
+                }
+              : null,
+          )
+          .filter((item): item is HllRecordsQueueItem => Boolean(item?.steamId64))
+      : [];
+
+  return {
+    status: summary?.status === "running" ? "running" : "idle",
+    mode: summary?.mode === "failed" || summary?.mode === "refresh" ? (summary.mode as HllRecordsKpmMode) : "pending",
+    totalPending: typeof summary?.totalPending === "number" ? summary.totalPending : 0,
+    currentBatch: toQueueItems(summary?.currentBatch),
+    queue: toQueueItems(summary?.queue),
+    checked: typeof summary?.checked === "number" ? summary.checked : 0,
+    updated: typeof summary?.updated === "number" ? summary.updated : 0,
+    failed: typeof summary?.failed === "number" ? summary.failed : 0,
+    lastStartedAt: state?.lastStartedAt?.toISOString() ?? null,
+    lastFinishedAt: state?.lastFinishedAt?.toISOString() ?? null,
+  };
+}
+
+export async function enrichHllRecordsKpm(limit = 25, mode: HllRecordsKpmMode = "pending") {
+  const startedAt = new Date();
+  const priorityPlayers = await listQueuePlayers(mode, limit);
+
   const steamIds = priorityPlayers.map((player) => player.steamId64);
   if (steamIds.length === 0) {
+    await saveHllRecordsDebugState({
+      status: "idle",
+      mode,
+      currentBatch: [],
+      queue: [],
+      checked: 0,
+      updated: 0,
+      failed: 0,
+      startedAt,
+      finishedAt: new Date(),
+    });
     return { checked: 0, updated: 0, failed: 0 };
   }
+
+  const queuePreview = await listQueuePlayers("pending", 20, steamIds);
+  await saveHllRecordsDebugState({
+    status: "running",
+    mode,
+    currentBatch: priorityPlayers,
+    queue: queuePreview,
+    checked: steamIds.length,
+    updated: 0,
+    failed: 0,
+    startedAt,
+  });
 
   let updated = 0;
   let failed = 0;
@@ -211,6 +388,19 @@ export async function enrichHllRecordsKpm(limit = 25, mode: HllRecordsKpmMode = 
     });
     failed += 1;
   }
+
+  const remainingQueue = await listQueuePlayers("pending", 20);
+  await saveHllRecordsDebugState({
+    status: "idle",
+    mode,
+    currentBatch: [],
+    queue: remainingQueue,
+    checked: steamIds.length,
+    updated,
+    failed,
+    startedAt,
+    finishedAt: new Date(),
+  });
 
   return { checked: steamIds.length, updated, failed, mode };
 }
