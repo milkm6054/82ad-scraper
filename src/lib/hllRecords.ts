@@ -521,19 +521,21 @@ export async function startHllRecordsKpmForSteamIds(
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
   }
 
+  const pendingCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "pending");
+  const failedCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "failed");
+  const selectedMode =
+    options?.mode ?? (pendingCount > 0 ? "pending" : failedCount > 0 ? "failed" : "pending");
   const debugState = await loadHllRecordsDebugState();
   const intervalMinutes = getHllRecordsIntervalMinutes();
   const now = Date.now();
   const lastFinishedAt = debugState.lastFinishedAt ? new Date(debugState.lastFinishedAt).getTime() : 0;
-  const isDue = options?.force || !lastFinishedAt || now - lastFinishedAt >= intervalMinutes * 60 * 1000;
+  const skipCooldown = options?.force || selectedMode === "failed";
+  const isDue = skipCooldown || !lastFinishedAt || now - lastFinishedAt >= intervalMinutes * 60 * 1000;
 
   if (debugState.status === "running" || !isDue) {
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
   }
 
-  const pendingCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "pending");
-  const selectedMode =
-    options?.mode ?? (pendingCount > 0 ? "pending" : (await countQueuePlayersForSteamIds(uniqueSteamIds, "failed")) > 0 ? "failed" : "pending");
   const batch = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, Math.max(1, limit));
   if (batch.length === 0) {
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);

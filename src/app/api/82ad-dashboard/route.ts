@@ -9,6 +9,11 @@ import {
 
 export const dynamic = "force-dynamic";
 
+function getEightySecondHllBatchLimit() {
+  const configured = Number(process.env.EIGHTYSECOND_HLLRECORDS_BATCH_SIZE || process.env.HLLRECORDS_REFRESH_LIMIT || 5);
+  return Number.isFinite(configured) && configured > 0 ? configured : 5;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -23,7 +28,7 @@ export async function GET(request: Request) {
     const visibleSteamIds = dashboard.players
       .map((player) => player.steamId64)
       .filter((steamId64) => /^\d{17}$/.test(steamId64));
-    const hllRecordsDebug = await startHllRecordsKpmForSteamIds(visibleSteamIds, 5, {
+    const hllRecordsDebug = await startHllRecordsKpmForSteamIds(visibleSteamIds, getEightySecondHllBatchLimit(), {
       force: forceRefresh,
       mode,
     });
