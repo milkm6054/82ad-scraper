@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { enrichHllRecordsKpmForSteamIds } from "@/lib/hllRecords";
+import { startHllRecordsKpmForSteamIds, type HllRecordsKpmMode } from "@/lib/hllRecords";
 import {
   loadCachedEightySecondDashboard,
   loadContactedPlayers,
@@ -13,6 +13,9 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const forceRefresh = searchParams.get("refresh") === "1";
+    const requestedMode = searchParams.get("mode");
+    const mode: HllRecordsKpmMode | undefined =
+      requestedMode === "failed" || requestedMode === "refresh" ? requestedMode : undefined;
     const dashboard = forceRefresh
       ? await refreshAndStoreEightySecondDashboard()
       : (await loadCachedEightySecondDashboard()) ?? (await refreshAndStoreEightySecondDashboard());
@@ -20,8 +23,9 @@ export async function GET(request: Request) {
     const visibleSteamIds = dashboard.players
       .map((player) => player.steamId64)
       .filter((steamId64) => /^\d{17}$/.test(steamId64));
-    const hllRecordsDebug = await enrichHllRecordsKpmForSteamIds(visibleSteamIds, 5, {
+    const hllRecordsDebug = await startHllRecordsKpmForSteamIds(visibleSteamIds, 5, {
       force: forceRefresh,
+      mode,
     });
     const [contactedPlayers, latestHllRecordsBySteamId] = await Promise.all([
       loadContactedPlayers(allSteamIds),

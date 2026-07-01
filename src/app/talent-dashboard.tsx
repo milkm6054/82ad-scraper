@@ -300,6 +300,7 @@ export function TalentDashboard() {
   const [loading, setLoading] = useState(true);
   const [loading82ad, setLoading82ad] = useState(false);
   const [refreshing82ad, setRefreshing82ad] = useState(false);
+  const [retrying82adFailed, setRetrying82adFailed] = useState(false);
   const [error, setError] = useState("");
   const [eightySecondError, setEightySecondError] = useState("");
   const [notice, setNotice] = useState("");
@@ -417,6 +418,33 @@ export function TalentDashboard() {
       cancelled = true;
     };
   }, [activeTab, eightySecondData.players.length, eightySecondData.servers.length, loadEightySecondDashboard]);
+
+  useEffect(() => {
+    if (activeTab !== "82ad") {
+      return;
+    }
+
+    const shouldPoll =
+      eightySecondData.hllRecordsDebug.status === "running" ||
+      eightySecondData.hllRecordsDebug.pendingCount > 0 ||
+      eightySecondData.hllRecordsDebug.failedCount > 0;
+
+    if (!shouldPoll) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadEightySecondDashboard().catch(() => undefined);
+    }, 10000);
+
+    return () => window.clearInterval(interval);
+  }, [
+    activeTab,
+    eightySecondData.hllRecordsDebug.failedCount,
+    eightySecondData.hllRecordsDebug.pendingCount,
+    eightySecondData.hllRecordsDebug.status,
+    loadEightySecondDashboard,
+  ]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
@@ -687,6 +715,47 @@ export function TalentDashboard() {
       );
     } finally {
       setRefreshing82ad(false);
+    }
+  }
+
+  async function retryFailedEightySecondHllKpm() {
+    setRetrying82adFailed(true);
+    setEightySecondError("");
+
+    try {
+      const response = await fetch("/api/82ad-dashboard?refresh=1&mode=failed", { cache: "no-store" });
+      const payload = await parseResponse<EightySecondDashboardResponse>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to retry 82AD HLL KPM.");
+      }
+
+      setEightySecondData({
+        criteria: payload.criteria || {
+          minKillsExclusive: 30,
+          minKpmInclusive: 0.75,
+          minDurationSeconds: 1800,
+        },
+        servers: payload.servers || [],
+        players: payload.players || [],
+        rosteredPlayers: payload.rosteredPlayers || [],
+        contactedPlayers: payload.contactedPlayers || [],
+        hllRecordsDebug: payload.hllRecordsDebug || {
+          mode: "pending",
+          pendingCount: 0,
+          failedCount: 0,
+          currentBatch: [],
+          queue: [],
+          status: "idle",
+          lastStartedAt: null,
+          lastFinishedAt: null,
+        },
+      });
+      setNotice("Retrying failed 82AD HLL KPM profiles.");
+    } catch (retryError) {
+      setEightySecondError(retryError instanceof Error ? retryError.message : "Failed to retry 82AD HLL KPM.");
+    } finally {
+      setRetrying82adFailed(false);
     }
   }
 
@@ -1312,14 +1381,24 @@ export function TalentDashboard() {
                   {formatDateTime(eightySecondData.hllRecordsDebug.lastFinishedAt)}
                 </p>
               </div>
-              <button
-                className="px-4 py-2"
-                type="button"
-                onClick={refreshEightySecondDashboard}
-                disabled={loading82ad || refreshing82ad}
-              >
-                {loading82ad || refreshing82ad ? "Refreshing..." : "Refresh 82AD stats"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="px-4 py-2"
+                  type="button"
+                  onClick={retryFailedEightySecondHllKpm}
+                  disabled={loading82ad || retrying82adFailed || eightySecondData.hllRecordsDebug.failedCount === 0}
+                >
+                  {retrying82adFailed ? "Retrying failed..." : "Retry failed HLL KPM"}
+                </button>
+                <button
+                  className="px-4 py-2"
+                  type="button"
+                  onClick={refreshEightySecondDashboard}
+                  disabled={loading82ad || refreshing82ad || retrying82adFailed}
+                >
+                  {loading82ad || refreshing82ad ? "Refreshing..." : "Refresh 82AD stats"}
+                </button>
+              </div>
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               {eightySecondData.servers.map((server) => (
