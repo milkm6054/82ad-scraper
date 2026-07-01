@@ -8,6 +8,7 @@
     "start": "node scripts/start-prod.mjs",
     "start:next": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "start:prod": "npm run start",
+    "cron:82ad-hllrecords": "node scripts/run-82ad-hllrecords-cron.mjs",
     "lint": "eslint",
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy"

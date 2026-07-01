@@ -4,6 +4,7 @@ const isWindows = process.platform === "win32";
 const npx = isWindows ? "npx.cmd" : "npx";
 const node = isWindows ? "node.exe" : "node";
 const port = process.env.PORT || "3000";
+const shouldRunInternalHllRecordsLoop = process.env.DISABLE_INTERNAL_HLLRECORDS_LOOP !== "true";
 
 function run(command, args, options = {}) {
   const child = spawn(command, args, {
@@ -31,12 +32,12 @@ function waitFor(child) {
 await waitFor(run(npx, ["prisma", "migrate", "deploy"]));
 
 const poller = run(node, ["scripts/poll-servers-loop.mjs"]);
-const hllKpmPoller = run(node, ["scripts/hllrecords-kpm-loop.mjs"]);
+const hllKpmPoller = shouldRunInternalHllRecordsLoop ? run(node, ["scripts/hllrecords-kpm-loop.mjs"]) : null;
 const next = run(npx, ["next", "start", "-H", "0.0.0.0", "-p", port]);
 
 function shutdown() {
   poller.kill("SIGTERM");
-  hllKpmPoller.kill("SIGTERM");
+  hllKpmPoller?.kill("SIGTERM");
   next.kill("SIGTERM");
 }
 

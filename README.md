@@ -42,8 +42,36 @@ HLLRecords KPM enrichment runs separately every 30 minutes in small batches; ove
 `HLLRECORDS_KPM_INTERVAL_MINUTES` and batch size with `HLLRECORDS_REFRESH_LIMIT`.
 The 82AD tab reads its two server URLs from `EIGHTYSECOND_SERVER_URLS` and scans a recent page size set by
 `EIGHTYSECOND_SCAN_PAGE_LIMIT`.
+If you want Railway Cron Jobs to be the source of truth for 82AD HLL KPM scraping, set
+`DISABLE_INTERNAL_HLLRECORDS_LOOP=true` on the web service so you do not run both schedulers.
 
 The included Dockerfile installs Python, Playwright, and Chromium for the HLLRecords profile KPM scrape.
+
+### 82AD HLL KPM cron job
+
+This repo now includes a protected cron endpoint:
+
+```text
+POST /api/cron/82ad-hllrecords
+```
+
+Authorize the request with:
+
+```text
+Authorization: Bearer <CRON_SECRET>
+```
+
+For Railway's native Cron Jobs, the clean setup is a second service from this same repo:
+
+1. Keep the main web service deployed normally.
+2. Add `CRON_SECRET` to both services.
+3. On the cron service set:
+   - Start Command: `npm run cron:82ad-hllrecords`
+   - Cron Schedule: `*/30 * * * *`
+   - `CRON_TARGET_URL=https://<your-web-service-domain>/api/cron/82ad-hllrecords`
+4. On the web service, optionally set `DISABLE_INTERNAL_HLLRECORDS_LOOP=true`.
+
+Railway cron schedules are configured in service settings, use UTC, and run the service start command on the schedule.
 
 ## Useful Test URLs
 
