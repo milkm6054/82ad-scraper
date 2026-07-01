@@ -44,7 +44,9 @@ export type HllRecordsDebugState = {
 };
 
 type HllRecordsQueueSummary = {
+  mode: HllRecordsKpmMode;
   pendingCount: number;
+  failedCount: number;
   currentBatch: HllRecordsQueueItem[];
   queue: HllRecordsQueueItem[];
   status: "idle" | "running";
@@ -382,7 +384,9 @@ export async function loadHllRecordsQueueSummaryForSteamIds(
   const uniqueSteamIds = Array.from(new Set(steamIds.map((steamId) => steamId.trim()).filter(Boolean)));
   if (uniqueSteamIds.length === 0) {
     return {
+      mode: "pending",
       pendingCount: 0,
+      failedCount: 0,
       currentBatch: [],
       queue: [],
       status: "idle",
@@ -391,21 +395,25 @@ export async function loadHllRecordsQueueSummaryForSteamIds(
     };
   }
 
-  const [debugState, pendingRows, pendingCount] = await Promise.all([
+  const [debugState, pendingRows, pendingCount, failedCount, failedRows] = await Promise.all([
     loadHllRecordsDebugState(),
     listQueuePlayersForSteamIds(uniqueSteamIds, "pending", previewTake + 32),
     countQueuePlayersForSteamIds(uniqueSteamIds, "pending"),
+    countQueuePlayersForSteamIds(uniqueSteamIds, "failed"),
+    listQueuePlayersForSteamIds(uniqueSteamIds, "failed", previewTake + 32),
   ]);
-  const pendingSteamIds = new Set(pendingRows.map((player) => player.steamId64));
-  const currentBatch = debugState.currentBatch.filter((player) => pendingSteamIds.has(player.steamId64));
+  const activeMode: HllRecordsKpmMode = pendingCount > 0 ? "pending" : failedCount > 0 ? "failed" : "pending";
+  const activeRows = activeMode === "pending" ? pendingRows : failedRows;
+  const activeSteamIds = new Set(activeRows.map((player) => player.steamId64));
+  const currentBatch = debugState.currentBatch.filter((player) => activeSteamIds.has(player.steamId64));
   const currentBatchIds = new Set(currentBatch.map((player) => player.steamId64));
   const queuedFromDebug = debugState.queue.filter(
-    (player) => pendingSteamIds.has(player.steamId64) && !currentBatchIds.has(player.steamId64),
+    (player) => activeSteamIds.has(player.steamId64) && !currentBatchIds.has(player.steamId64),
   );
 
   const queue = [...queuedFromDebug];
   if (queue.length < previewTake) {
-    for (const player of pendingRows) {
+    for (const player of activeRows) {
       if (currentBatchIds.has(player.steamId64) || queue.some((item) => item.steamId64 === player.steamId64)) {
         continue;
       }
@@ -417,7 +425,9 @@ export async function loadHllRecordsQueueSummaryForSteamIds(
   }
 
   return {
+    mode: currentBatch.length > 0 ? debugState.mode : activeMode,
     pendingCount,
+    failedCount,
     currentBatch,
     queue,
     status: currentBatch.length > 0 ? "running" : "idle",
@@ -429,7 +439,7 @@ export async function loadHllRecordsQueueSummaryForSteamIds(
 export async function enrichHllRecordsKpmForSteamIds(
   steamIds: string[],
   limit = 5,
-  options?: { force?: boolean; previewTake?: number },
+  options?: { force?: boolean; previewTake?: number; mode?: HllRecordsKpmMode },
 ) {
   const uniqueSteamIds = Array.from(
     new Set(steamIds.map((steamId) => steamId.trim()).filter((steamId) => STEAM_ID64_PATTERN.test(steamId))),
@@ -455,7 +465,10 @@ export async function enrichHllRecordsKpmForSteamIds(
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
   }
 
-  const batch = await listQueuePlayersForSteamIds(uniqueSteamIds, "pending", Math.max(1, limit));
+  const pendingCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "pending");
+  const selectedMode =
+    options?.mode ?? (pendingCount > 0 ? "pending" : (await countQueuePlayersForSteamIds(uniqueSteamIds, "failed")) > 0 ? "failed" : "pending");
+  const batch = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, Math.max(1, limit));
   if (batch.length === 0) {
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
   }
@@ -465,11 +478,11 @@ export async function enrichHllRecordsKpmForSteamIds(
 
   try {
     const batchSteamIds = batch.map((player) => player.steamId64);
-    const queuePreview = await listQueuePlayersForSteamIds(uniqueSteamIds, "pending", previewTake, batchSteamIds);
+    const queuePreview = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, previewTake, batchSteamIds);
 
     await saveHllRecordsDebugState({
       status: "running",
-      mode: "pending",
+      mode: selectedMode,
       currentBatch: batch,
       queue: queuePreview,
       checked: batch.length,
@@ -515,10 +528,10 @@ export async function enrichHllRecordsKpmForSteamIds(
       failed += 1;
     }
 
-    const remainingQueue = await listQueuePlayersForSteamIds(uniqueSteamIds, "pending", previewTake);
+    const remainingQueue = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, previewTake);
     await saveHllRecordsDebugState({
       status: "idle",
-      mode: "pending",
+      mode: selectedMode,
       currentBatch: [],
       queue: remainingQueue,
       checked: batch.length,

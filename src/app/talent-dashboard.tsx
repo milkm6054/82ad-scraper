@@ -101,6 +101,7 @@ type EightySecondPlayerRow = {
   steamId64: string;
   hllRecordsUrl: string | null;
   hllRecordsKpm180: number | null;
+  hllRecordsStatError?: string | null;
   contactedAt: string | null;
   timesSpotted: number;
   bestKpm: number;
@@ -123,7 +124,9 @@ type EightySecondDashboardResponse = {
   rosteredPlayers: EightySecondRosteredPlayerRow[];
   contactedPlayers: EightySecondPlayerRow[];
   hllRecordsDebug: {
+    mode: "pending" | "failed" | "refresh";
     pendingCount: number;
+    failedCount: number;
     currentBatch: Array<{ steamId64: string; name: string }>;
     queue: Array<{ steamId64: string; name: string }>;
     status: "idle" | "running";
@@ -270,11 +273,13 @@ export function TalentDashboard() {
     players: [],
     rosteredPlayers: [],
     contactedPlayers: [],
-    hllRecordsDebug: {
-      pendingCount: 0,
-      currentBatch: [],
-      queue: [],
-      status: "idle",
+      hllRecordsDebug: {
+        mode: "pending",
+        pendingCount: 0,
+        failedCount: 0,
+        currentBatch: [],
+        queue: [],
+        status: "idle",
       lastStartedAt: null,
       lastFinishedAt: null,
     },
@@ -347,7 +352,9 @@ export function TalentDashboard() {
       rosteredPlayers: payload.rosteredPlayers || [],
       contactedPlayers: payload.contactedPlayers || [],
       hllRecordsDebug: payload.hllRecordsDebug || {
+        mode: "pending",
         pendingCount: 0,
+        failedCount: 0,
         currentBatch: [],
         queue: [],
         status: "idle",
@@ -664,7 +671,9 @@ export function TalentDashboard() {
         rosteredPlayers: payload.rosteredPlayers || [],
         contactedPlayers: payload.contactedPlayers || [],
         hllRecordsDebug: payload.hllRecordsDebug || {
+          mode: "pending",
           pendingCount: 0,
+          failedCount: 0,
           currentBatch: [],
           queue: [],
           status: "idle",
@@ -757,7 +766,9 @@ export function TalentDashboard() {
           rosteredPlayers: refreshPayload.rosteredPlayers || [],
           contactedPlayers: refreshPayload.contactedPlayers || [],
           hllRecordsDebug: refreshPayload.hllRecordsDebug || {
+            mode: "pending",
             pendingCount: 0,
+            failedCount: 0,
             currentBatch: [],
             queue: [],
             status: "idle",
@@ -819,7 +830,9 @@ export function TalentDashboard() {
           rosteredPlayers: refreshPayload.rosteredPlayers || [],
           contactedPlayers: refreshPayload.contactedPlayers || [],
           hllRecordsDebug: refreshPayload.hllRecordsDebug || {
+            mode: "pending",
             pendingCount: 0,
+            failedCount: 0,
             currentBatch: [],
             queue: [],
             status: "idle",
@@ -1294,8 +1307,8 @@ export function TalentDashboard() {
                 <p className="muted mt-1 text-xs">
                   Background polling keeps this updated every 2 hours even with the tab closed, and it looks back across the last 100 games per server.
                 </p>
-                <p className="muted mt-1 text-xs">
-                  HLL KPM left to scrape: {eightySecondData.hllRecordsDebug.pendingCount} | Status: {eightySecondData.hllRecordsDebug.status} | Last batch finished{" "}
+              <p className="muted mt-1 text-xs">
+                  HLL KPM left to scrape: {eightySecondData.hllRecordsDebug.pendingCount} | Failed: {eightySecondData.hllRecordsDebug.failedCount} | Mode: {eightySecondData.hllRecordsDebug.mode} | Status: {eightySecondData.hllRecordsDebug.status} | Last batch finished{" "}
                   {formatDateTime(eightySecondData.hllRecordsDebug.lastFinishedAt)}
                 </p>
               </div>
@@ -1422,12 +1435,14 @@ export function TalentDashboard() {
                           <td className="px-4 py-3 font-mono text-xs">{player.steamId64}</td>
                           <td className="px-4 py-3">{player.timesSpotted}</td>
                           <td className="px-4 py-3">{player.bestKpm.toFixed(2)}</td>
-                          <td className="px-4 py-3">
+                          <td className="px-4 py-3" title={player.hllRecordsStatError || undefined}>
                             {!player.hllRecordsUrl
                               ? "N/A"
                               : typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
                               ? player.hllRecordsKpm180.toFixed(2)
-                              : "Pending"}
+                              : player.hllRecordsStatError
+                                ? <span className="text-amber-200">Failed</span>
+                                : "Pending"}
                           </td>
                           <td className="px-4 py-3">{player.bestKills}</td>
                           <td className="px-4 py-3">

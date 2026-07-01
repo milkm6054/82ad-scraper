@@ -52,6 +52,7 @@ export async function GET(request: Request) {
         ...player,
         hllRecordsKpm180: latest?.hllRecordsKpm180 ?? player.hllRecordsKpm180,
         hllRecordsUrl: latest?.hllRecordsUrl ?? player.hllRecordsUrl,
+        hllRecordsStatError: latest?.hllRecordsStatError ?? null,
       };
     };
 
@@ -72,7 +73,9 @@ export async function GET(request: Request) {
           contactedAt: contactedPlayers.get(player.steamId64)?.contactedAt?.toISOString() ?? null,
         })),
       hllRecordsDebug: {
+        mode: hllRecordsDebug.mode,
         pendingCount: hllRecordsDebug.pendingCount,
+        failedCount: hllRecordsDebug.failedCount,
         currentBatch,
         queue: queuedPlayers,
         status: hllRecordsDebug.status,

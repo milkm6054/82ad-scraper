@@ -489,7 +489,7 @@ export async function loadContactedPlayers(steamIds?: string[]) {
 export async function loadStoredHllRecordsKpmBySteamId(steamIds: string[]) {
   const uniqueSteamIds = Array.from(new Set(steamIds.filter(Boolean)));
   if (uniqueSteamIds.length === 0) {
-    return new Map<string, { hllRecordsKpm180: number | null; hllRecordsUrl: string | null }>();
+    return new Map<string, { hllRecordsKpm180: number | null; hllRecordsUrl: string | null; hllRecordsStatError: string | null }>();
   }
 
   const players = await prisma.spottedPlayer.findMany({
@@ -502,6 +502,7 @@ export async function loadStoredHllRecordsKpmBySteamId(steamIds: string[]) {
       steamId64: true,
       hllRecordsKpm180: true,
       hllRecordsUrl: true,
+      hllRecordsStatError: true,
     },
   });
 
@@ -512,6 +513,7 @@ export async function loadStoredHllRecordsKpmBySteamId(steamIds: string[]) {
         hllRecordsKpm180:
           typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0 ? player.hllRecordsKpm180 : null,
         hllRecordsUrl: player.hllRecordsUrl,
+        hllRecordsStatError: player.hllRecordsStatError,
       },
     ]),
   );
