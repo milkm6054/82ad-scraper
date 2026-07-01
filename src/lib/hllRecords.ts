@@ -436,6 +436,136 @@ export async function loadHllRecordsQueueSummaryForSteamIds(
   };
 }
 
+async function processHllRecordsBatchForSteamIds({
+  uniqueSteamIds,
+  batch,
+  mode,
+  previewTake,
+  startedAt,
+}: {
+  uniqueSteamIds: string[];
+  batch: HllRecordsQueueItem[];
+  mode: HllRecordsKpmMode;
+  previewTake: number;
+  startedAt: Date;
+}) {
+  let updated = 0;
+  let failed = 0;
+
+  try {
+    for (const { steamId64 } of batch) {
+      const fetchedAt = new Date();
+      let stats: HllRecordStatResult | Error | undefined;
+
+      try {
+        stats = (await fetchHllRecordStatsBatch([steamId64])).get(steamId64);
+      } catch (error) {
+        stats = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
+      }
+
+      if (stats && !(stats instanceof Error)) {
+        await prisma.spottedPlayer.update({
+          where: { steamId64 },
+          data: {
+            hllRecordsKpm180: stats.kpm180,
+            hllRecordsStatError: null,
+            hllRecordsStatFetchedAt: fetchedAt,
+          },
+        });
+        updated += 1;
+        continue;
+      }
+
+      const message = stats instanceof Error ? stats.message : "No HLLRecords result returned for this player.";
+      await prisma.spottedPlayer.update({
+        where: { steamId64 },
+        data: {
+          hllRecordsStatError: message,
+          hllRecordsStatFetchedAt: fetchedAt,
+        },
+      });
+      failed += 1;
+    }
+  } finally {
+    const remainingQueue = await listQueuePlayersForSteamIds(uniqueSteamIds, mode, previewTake);
+    await saveHllRecordsDebugState({
+      status: "idle",
+      mode,
+      currentBatch: [],
+      queue: remainingQueue,
+      checked: batch.length,
+      updated,
+      failed,
+      startedAt,
+      finishedAt: new Date(),
+    });
+    hllRecordsRunInProgress = false;
+  }
+}
+
+export async function startHllRecordsKpmForSteamIds(
+  steamIds: string[],
+  limit = 5,
+  options?: { force?: boolean; previewTake?: number; mode?: HllRecordsKpmMode },
+) {
+  const uniqueSteamIds = Array.from(
+    new Set(steamIds.map((steamId) => steamId.trim()).filter((steamId) => STEAM_ID64_PATTERN.test(steamId))),
+  );
+  const previewTake = options?.previewTake ?? 20;
+
+  if (uniqueSteamIds.length === 0) {
+    return loadHllRecordsQueueSummaryForSteamIds([], previewTake);
+  }
+
+  if (hllRecordsRunInProgress) {
+    return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
+  }
+
+  const debugState = await loadHllRecordsDebugState();
+  const intervalMinutes = getHllRecordsIntervalMinutes();
+  const now = Date.now();
+  const lastFinishedAt = debugState.lastFinishedAt ? new Date(debugState.lastFinishedAt).getTime() : 0;
+  const isDue = options?.force || !lastFinishedAt || now - lastFinishedAt >= intervalMinutes * 60 * 1000;
+
+  if (debugState.status === "running" || !isDue) {
+    return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
+  }
+
+  const pendingCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "pending");
+  const selectedMode =
+    options?.mode ?? (pendingCount > 0 ? "pending" : (await countQueuePlayersForSteamIds(uniqueSteamIds, "failed")) > 0 ? "failed" : "pending");
+  const batch = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, Math.max(1, limit));
+  if (batch.length === 0) {
+    return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
+  }
+
+  hllRecordsRunInProgress = true;
+  const startedAt = new Date();
+  const batchSteamIds = batch.map((player) => player.steamId64);
+  const queuePreview = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, previewTake, batchSteamIds);
+
+  await saveHllRecordsDebugState({
+    status: "running",
+    mode: selectedMode,
+    currentBatch: batch,
+    queue: queuePreview,
+    checked: batch.length,
+    updated: 0,
+    failed: 0,
+    startedAt,
+  });
+
+  void processHllRecordsBatchForSteamIds({
+    uniqueSteamIds,
+    batch,
+    mode: selectedMode,
+    previewTake,
+    startedAt,
+  });
+
+  return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
+}
+
 export async function enrichHllRecordsKpmForSteamIds(
   steamIds: string[],
   limit = 5,
