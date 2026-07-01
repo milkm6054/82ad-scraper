@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { loadHllRecordsDebugState } from "@/lib/hllRecords";
+import { enrichHllRecordsKpmForSteamIds } from "@/lib/hllRecords";
 import {
   loadCachedEightySecondDashboard,
   loadContactedPlayers,
@@ -17,20 +17,20 @@ export async function GET(request: Request) {
       ? await refreshAndStoreEightySecondDashboard()
       : (await loadCachedEightySecondDashboard()) ?? (await refreshAndStoreEightySecondDashboard());
     const allSteamIds = [...dashboard.players, ...dashboard.rosteredPlayers].map((player) => player.steamId64);
-    const [contactedPlayers, latestHllRecordsBySteamId, hllRecordsDebug] = await Promise.all([
+    const visibleSteamIds = dashboard.players
+      .map((player) => player.steamId64)
+      .filter((steamId64) => /^\d{17}$/.test(steamId64));
+    const hllRecordsDebug = await enrichHllRecordsKpmForSteamIds(visibleSteamIds, 5, {
+      force: forceRefresh,
+    });
+    const [contactedPlayers, latestHllRecordsBySteamId] = await Promise.all([
       loadContactedPlayers(allSteamIds),
       loadStoredHllRecordsKpmBySteamId(allSteamIds),
-      loadHllRecordsDebugState(),
     ]);
 
     const playerNameBySteamId = new Map(
       [...dashboard.players, ...dashboard.rosteredPlayers].map((player) => [player.steamId64, player.name]),
     );
-    const visiblePlayers = dashboard.players.filter((player) => /^\d{17}$/.test(player.steamId64));
-    const pendingPlayers = visiblePlayers.filter((player) => {
-      const latest = latestHllRecordsBySteamId.get(player.steamId64);
-      return !(typeof latest?.hllRecordsKpm180 === "number" && latest.hllRecordsKpm180 > 0);
-    });
     const currentBatch = hllRecordsDebug.currentBatch
       .filter((item) => playerNameBySteamId.has(item.steamId64))
       .map((item) => ({
@@ -72,7 +72,7 @@ export async function GET(request: Request) {
           contactedAt: contactedPlayers.get(player.steamId64)?.contactedAt?.toISOString() ?? null,
         })),
       hllRecordsDebug: {
-        pendingCount: pendingPlayers.length,
+        pendingCount: hllRecordsDebug.pendingCount,
         currentBatch,
         queue: queuedPlayers,
         status: hllRecordsDebug.status,

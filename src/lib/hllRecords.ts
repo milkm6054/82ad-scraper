@@ -43,6 +43,17 @@ export type HllRecordsDebugState = {
   lastFinishedAt: string | null;
 };
 
+type HllRecordsQueueSummary = {
+  pendingCount: number;
+  currentBatch: HllRecordsQueueItem[];
+  queue: HllRecordsQueueItem[];
+  status: "idle" | "running";
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+};
+
+let hllRecordsRunInProgress = false;
+
 async function runPythonScraper(args: string[]): Promise<string> {
   const scriptPath = path.join(process.cwd(), "scripts", "fetch_hll_stats.py");
   let rawOutput = "";
@@ -203,9 +214,53 @@ async function listQueuePlayers(mode: HllRecordsKpmMode, take: number, excludeSt
   });
 }
 
+async function listQueuePlayersForSteamIds(
+  steamIds: string[],
+  mode: HllRecordsKpmMode,
+  take: number,
+  excludeSteamIds: string[] = [],
+) {
+  const uniqueSteamIds = Array.from(new Set(steamIds.map((steamId) => steamId.trim()).filter(Boolean)));
+  if (uniqueSteamIds.length === 0) {
+    return [];
+  }
+
+  return prisma.spottedPlayer.findMany({
+    where: {
+      steamId64: {
+        in: uniqueSteamIds,
+        ...(excludeSteamIds.length > 0 ? { notIn: excludeSteamIds } : {}),
+      },
+      ...getQueueWhere(mode),
+    },
+    orderBy: [{ hllRecordsStatFetchedAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
+    take,
+    select: {
+      steamId64: true,
+      name: true,
+    },
+  });
+}
+
 async function countQueuePlayers(mode: HllRecordsKpmMode) {
   return prisma.spottedPlayer.count({
     where: getQueueWhere(mode),
+  });
+}
+
+async function countQueuePlayersForSteamIds(steamIds: string[], mode: HllRecordsKpmMode) {
+  const uniqueSteamIds = Array.from(new Set(steamIds.map((steamId) => steamId.trim()).filter(Boolean)));
+  if (uniqueSteamIds.length === 0) {
+    return 0;
+  }
+
+  return prisma.spottedPlayer.count({
+    where: {
+      steamId64: {
+        in: uniqueSteamIds,
+      },
+      ...getQueueWhere(mode),
+    },
   });
 }
 
@@ -318,6 +373,165 @@ export async function loadHllRecordsDebugState(): Promise<HllRecordsDebugState> 
     lastStartedAt: state?.lastStartedAt?.toISOString() ?? null,
     lastFinishedAt: state?.lastFinishedAt?.toISOString() ?? null,
   };
+}
+
+export async function loadHllRecordsQueueSummaryForSteamIds(
+  steamIds: string[],
+  previewTake = 20,
+): Promise<HllRecordsQueueSummary> {
+  const uniqueSteamIds = Array.from(new Set(steamIds.map((steamId) => steamId.trim()).filter(Boolean)));
+  if (uniqueSteamIds.length === 0) {
+    return {
+      pendingCount: 0,
+      currentBatch: [],
+      queue: [],
+      status: "idle",
+      lastStartedAt: null,
+      lastFinishedAt: null,
+    };
+  }
+
+  const [debugState, pendingRows, pendingCount] = await Promise.all([
+    loadHllRecordsDebugState(),
+    listQueuePlayersForSteamIds(uniqueSteamIds, "pending", previewTake + 32),
+    countQueuePlayersForSteamIds(uniqueSteamIds, "pending"),
+  ]);
+  const pendingSteamIds = new Set(pendingRows.map((player) => player.steamId64));
+  const currentBatch = debugState.currentBatch.filter((player) => pendingSteamIds.has(player.steamId64));
+  const currentBatchIds = new Set(currentBatch.map((player) => player.steamId64));
+  const queuedFromDebug = debugState.queue.filter(
+    (player) => pendingSteamIds.has(player.steamId64) && !currentBatchIds.has(player.steamId64),
+  );
+
+  const queue = [...queuedFromDebug];
+  if (queue.length < previewTake) {
+    for (const player of pendingRows) {
+      if (currentBatchIds.has(player.steamId64) || queue.some((item) => item.steamId64 === player.steamId64)) {
+        continue;
+      }
+      queue.push(player);
+      if (queue.length >= previewTake) {
+        break;
+      }
+    }
+  }
+
+  return {
+    pendingCount,
+    currentBatch,
+    queue,
+    status: currentBatch.length > 0 ? "running" : "idle",
+    lastStartedAt: debugState.lastStartedAt,
+    lastFinishedAt: debugState.lastFinishedAt,
+  };
+}
+
+export async function enrichHllRecordsKpmForSteamIds(
+  steamIds: string[],
+  limit = 5,
+  options?: { force?: boolean; previewTake?: number },
+) {
+  const uniqueSteamIds = Array.from(
+    new Set(steamIds.map((steamId) => steamId.trim()).filter((steamId) => STEAM_ID64_PATTERN.test(steamId))),
+  );
+  const previewTake = options?.previewTake ?? 20;
+
+  if (uniqueSteamIds.length === 0) {
+    return loadHllRecordsQueueSummaryForSteamIds([], previewTake);
+  }
+
+  if (hllRecordsRunInProgress) {
+    return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
+  }
+
+  const debugState = await loadHllRecordsDebugState();
+  const intervalMinutes = getHllRecordsIntervalMinutes();
+  const now = Date.now();
+  const lastFinishedAt = debugState.lastFinishedAt ? new Date(debugState.lastFinishedAt).getTime() : 0;
+  const isDue =
+    options?.force || !lastFinishedAt || now - lastFinishedAt >= intervalMinutes * 60 * 1000;
+
+  if (debugState.status === "running" || !isDue) {
+    return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
+  }
+
+  const batch = await listQueuePlayersForSteamIds(uniqueSteamIds, "pending", Math.max(1, limit));
+  if (batch.length === 0) {
+    return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
+  }
+
+  hllRecordsRunInProgress = true;
+  const startedAt = new Date();
+
+  try {
+    const batchSteamIds = batch.map((player) => player.steamId64);
+    const queuePreview = await listQueuePlayersForSteamIds(uniqueSteamIds, "pending", previewTake, batchSteamIds);
+
+    await saveHllRecordsDebugState({
+      status: "running",
+      mode: "pending",
+      currentBatch: batch,
+      queue: queuePreview,
+      checked: batch.length,
+      updated: 0,
+      failed: 0,
+      startedAt,
+    });
+
+    let updated = 0;
+    let failed = 0;
+
+    for (const steamId64 of batchSteamIds) {
+      const fetchedAt = new Date();
+      let stats: HllRecordStatResult | Error | undefined;
+
+      try {
+        stats = (await fetchHllRecordStatsBatch([steamId64])).get(steamId64);
+      } catch (error) {
+        stats = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
+      }
+
+      if (stats && !(stats instanceof Error)) {
+        await prisma.spottedPlayer.update({
+          where: { steamId64 },
+          data: {
+            hllRecordsKpm180: stats.kpm180,
+            hllRecordsStatError: null,
+            hllRecordsStatFetchedAt: fetchedAt,
+          },
+        });
+        updated += 1;
+        continue;
+      }
+
+      const message = stats instanceof Error ? stats.message : "No HLLRecords result returned for this player.";
+      await prisma.spottedPlayer.update({
+        where: { steamId64 },
+        data: {
+          hllRecordsStatError: message,
+          hllRecordsStatFetchedAt: fetchedAt,
+        },
+      });
+      failed += 1;
+    }
+
+    const remainingQueue = await listQueuePlayersForSteamIds(uniqueSteamIds, "pending", previewTake);
+    await saveHllRecordsDebugState({
+      status: "idle",
+      mode: "pending",
+      currentBatch: [],
+      queue: remainingQueue,
+      checked: batch.length,
+      updated,
+      failed,
+      startedAt,
+      finishedAt: new Date(),
+    });
+  } finally {
+    hllRecordsRunInProgress = false;
+  }
+
+  return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
 }
 
 export async function enrichHllRecordsKpm(limit = 25, mode: HllRecordsKpmMode = "pending") {
