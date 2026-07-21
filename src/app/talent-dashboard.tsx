@@ -1133,15 +1133,6 @@ export function TalentDashboard() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <label className="flex items-center gap-2 px-2 text-sm muted">
-                  <input
-                    type="checkbox"
-                    checked={autoRetry82adFailed}
-                    onChange={(event) => toggleAutoRetry82adFailed(event.target.checked)}
-                    disabled={loading82ad || refreshing82ad}
-                  />
-                  Auto-retry failed
-                </label>
                 <button
                   className="px-4 py-2"
                   onClick={() => scanServer(server.id)}
@@ -1409,6 +1400,15 @@ export function TalentDashboard() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button
+                  className="px-4 py-2"
+                  type="button"
+                  onClick={() => toggleAutoRetry82adFailed(!autoRetry82adFailed)}
+                  disabled={loading82ad || refreshing82ad}
+                  aria-pressed={autoRetry82adFailed}
+                >
+                  Auto-retry failed: {autoRetry82adFailed ? "On" : "Off"}
+                </button>
                 <button
                   className="px-4 py-2"
                   type="button"
