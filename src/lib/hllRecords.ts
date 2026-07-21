@@ -521,10 +521,10 @@ export async function startHllRecordsKpmForSteamIds(
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
   }
 
-  const pendingCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "pending");
-  const failedCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "failed");
-  const selectedMode =
-    options?.mode ?? (pendingCount > 0 ? "pending" : failedCount > 0 ? "failed" : "pending");
+  // Failed profiles are deliberately excluded from the normal background queue.
+  // They are often permanent (private/deleted profiles, or a changed upstream page)
+  // and retrying them on every dashboard load makes the queue look stuck.
+  const selectedMode = options?.mode ?? "pending";
   const debugState = await loadHllRecordsDebugState();
   const intervalMinutes = getHllRecordsIntervalMinutes();
   const now = Date.now();
@@ -597,9 +597,7 @@ export async function enrichHllRecordsKpmForSteamIds(
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);
   }
 
-  const pendingCount = await countQueuePlayersForSteamIds(uniqueSteamIds, "pending");
-  const selectedMode =
-    options?.mode ?? (pendingCount > 0 ? "pending" : (await countQueuePlayersForSteamIds(uniqueSteamIds, "failed")) > 0 ? "failed" : "pending");
+  const selectedMode = options?.mode ?? "pending";
   const batch = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, Math.max(1, limit));
   if (batch.length === 0) {
     return loadHllRecordsQueueSummaryForSteamIds(uniqueSteamIds, previewTake);

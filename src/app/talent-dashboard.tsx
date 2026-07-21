@@ -1520,7 +1520,12 @@ export function TalentDashboard() {
                               : typeof player.hllRecordsKpm180 === "number" && player.hllRecordsKpm180 > 0
                               ? player.hllRecordsKpm180.toFixed(2)
                               : player.hllRecordsStatError
-                                ? <span className="text-amber-200">Failed</span>
+                                ? (
+                                    <div>
+                                      <span className="text-amber-200">Failed</span>
+                                      <p className="mt-1 max-w-56 text-xs text-amber-200">{formatShortError(player.hllRecordsStatError)}</p>
+                                    </div>
+                                  )
                                 : "Pending"}
                           </td>
                           <td className="px-4 py-3">{player.bestKills}</td>
