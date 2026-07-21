@@ -301,6 +301,7 @@ export function TalentDashboard() {
   const [loading82ad, setLoading82ad] = useState(false);
   const [refreshing82ad, setRefreshing82ad] = useState(false);
   const [retrying82adFailed, setRetrying82adFailed] = useState(false);
+  const [autoRetry82adFailed, setAutoRetry82adFailed] = useState(false);
   const [error, setError] = useState("");
   const [eightySecondError, setEightySecondError] = useState("");
   const [notice, setNotice] = useState("");
@@ -334,8 +335,8 @@ export function TalentDashboard() {
     });
   }, []);
 
-  const loadEightySecondDashboard = useCallback(async () => {
-    const response = await fetch("/api/82ad-dashboard", { cache: "no-store" });
+  const loadEightySecondDashboard = useCallback(async (retryFailed = autoRetry82adFailed) => {
+    const response = await fetch(`/api/82ad-dashboard${retryFailed ? "?retryFailed=1" : ""}`, { cache: "no-store" });
     const payload = await parseResponse<EightySecondDashboardResponse>(response);
 
     if (!response.ok) {
@@ -363,6 +364,13 @@ export function TalentDashboard() {
         lastFinishedAt: null,
       },
     });
+  }, [autoRetry82adFailed]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setAutoRetry82adFailed(window.localStorage.getItem("82ad-auto-retry-failed") === "true");
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, []);
 
   useEffect(() => {
@@ -759,6 +767,16 @@ export function TalentDashboard() {
     }
   }
 
+  function toggleAutoRetry82adFailed(enabled: boolean) {
+    setAutoRetry82adFailed(enabled);
+    window.localStorage.setItem("82ad-auto-retry-failed", String(enabled));
+    if (enabled) {
+      void loadEightySecondDashboard(true).catch((loadError) => {
+        setEightySecondError(loadError instanceof Error ? loadError.message : "Failed to load 82AD server stats.");
+      });
+    }
+  }
+
   async function scanGame(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -1115,6 +1133,15 @@ export function TalentDashboard() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <label className="flex items-center gap-2 px-2 text-sm muted">
+                  <input
+                    type="checkbox"
+                    checked={autoRetry82adFailed}
+                    onChange={(event) => toggleAutoRetry82adFailed(event.target.checked)}
+                    disabled={loading82ad || refreshing82ad}
+                  />
+                  Auto-retry failed
+                </label>
                 <button
                   className="px-4 py-2"
                   onClick={() => scanServer(server.id)}

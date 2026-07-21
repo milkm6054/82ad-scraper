@@ -19,6 +19,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const forceRefresh = searchParams.get("refresh") === "1";
     const requestedMode = searchParams.get("mode");
+    const retryFailedWhenPendingEmpty = searchParams.get("retryFailed") === "1";
     const mode: HllRecordsKpmMode | undefined =
       requestedMode === "failed" || requestedMode === "refresh" ? requestedMode : undefined;
     const dashboard = forceRefresh
@@ -31,6 +32,7 @@ export async function GET(request: Request) {
     const hllRecordsDebug = await startHllRecordsKpmForSteamIds(visibleSteamIds, getEightySecondHllBatchLimit(), {
       force: forceRefresh,
       mode,
+      retryFailedWhenPendingEmpty,
     });
     const [contactedPlayers, latestHllRecordsBySteamId] = await Promise.all([
       loadContactedPlayers(allSteamIds),
