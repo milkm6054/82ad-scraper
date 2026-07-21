@@ -1,6 +1,5 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { fetchHllRecordStatsBatch, HllRecordStatResult } from "@/lib/hllRecords";
 
 const ALLOWED_KILL_TYPES = new Set(["infantry", "sniper", "machine_gun"]);
 const MIN_KILLS = 40;
@@ -558,50 +557,10 @@ async function loadOrFetchHllRecordsKpmBySteamId(steamIds: string[]) {
     return kpmBySteamId;
   }
 
-  const fetchedAt = new Date();
-  let profileStatsBySteamId = new Map<string, HllRecordStatResult | Error>();
-
-  try {
-    profileStatsBySteamId = await fetchHllRecordStatsBatch(missingSteamIds);
-  } catch (error) {
-    const statError = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
-    profileStatsBySteamId = new Map(missingSteamIds.map((steamId) => [steamId, statError]));
-  }
-
+  // KPM enrichment runs through the bounded background queue. Fetching every
+  // missing profile while loading the dashboard creates oversized browser jobs.
   for (const steamId64 of missingSteamIds) {
-    const profileStats = profileStatsBySteamId.get(steamId64);
-    const statUpdate =
-      profileStats && !(profileStats instanceof Error)
-        ? {
-            hllRecordsKpm180: profileStats.kpm180,
-            hllRecordsStatError: null,
-            hllRecordsStatFetchedAt: fetchedAt,
-          }
-        : {
-            hllRecordsStatError:
-              profileStats instanceof Error
-                ? profileStats.message
-                : "No HLLRecords result returned for this player.",
-            hllRecordsStatFetchedAt: fetchedAt,
-          };
-
-    await prisma.spottedPlayer.upsert({
-      where: { steamId64 },
-      create: {
-        steamId64,
-        name: existingBySteamId.get(steamId64)?.name || steamId64,
-        hllRecordsUrl: `https://hllrecords.com/profiles/${steamId64}`,
-        ...statUpdate,
-      },
-      update: {
-        ...statUpdate,
-      },
-    });
-
-    kpmBySteamId.set(
-      steamId64,
-      profileStats && !(profileStats instanceof Error) ? profileStats.kpm180 : null,
-    );
+    kpmBySteamId.set(steamId64, null);
   }
 
   return kpmBySteamId;
@@ -716,62 +675,20 @@ export async function saveScanResult(serverId: string, scan: ScanGameResult) {
   const unrosteredPlayers = scan.qualifiedPlayers.filter(
     (player) => !activeRosterSteamIds.has(player.steamId64) && !excludedSteamIds.has(player.steamId64),
   );
-  const existingPlayers = await prisma.spottedPlayer.findMany({
-    where: {
-      steamId64: {
-        in: unrosteredPlayers.map((player) => player.steamId64),
-      },
-    },
-    select: {
-      steamId64: true,
-      hllRecordsKpm180: true,
-    },
-  });
-  const playersWithStats = new Set(
-    existingPlayers.filter((player) => typeof player.hllRecordsKpm180 === "number").map((player) => player.steamId64),
-  );
-  const steamIdsNeedingStats = unrosteredPlayers
-    .map((player) => player.steamId64)
-    .filter((steamId) => !playersWithStats.has(steamId));
-  const fetchedAt = new Date();
-  let profileStatsBySteamId = new Map<string, HllRecordStatResult | Error>();
-
-  if (steamIdsNeedingStats.length > 0) {
-    try {
-      profileStatsBySteamId = await fetchHllRecordStatsBatch(steamIdsNeedingStats);
-    } catch (error) {
-      const statError = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
-      profileStatsBySteamId = new Map(steamIdsNeedingStats.map((steamId) => [steamId, statError]));
-    }
-  }
+  // Do not scrape here: this code runs during a dashboard refresh and may
+  // contain dozens of new players. The HLL queue handles them in small batches.
 
   for (const player of unrosteredPlayers) {
-    const profileStats = profileStatsBySteamId.get(player.steamId64);
-    const statUpdate =
-      profileStats && !(profileStats instanceof Error)
-        ? {
-            hllRecordsKpm180: profileStats.kpm180,
-            hllRecordsStatError: null,
-            hllRecordsStatFetchedAt: fetchedAt,
-          }
-        : profileStats instanceof Error
-          ? {
-              hllRecordsStatError: profileStats.message,
-              hllRecordsStatFetchedAt: fetchedAt,
-            }
-          : {};
     const spottedPlayer = await prisma.spottedPlayer.upsert({
       where: { steamId64: player.steamId64 },
       create: {
         steamId64: player.steamId64,
         name: player.name,
         hllRecordsUrl: `https://hllrecords.com/profiles/${player.steamId64}`,
-        ...statUpdate,
       },
       update: {
         name: player.name,
         hllRecordsUrl: `https://hllrecords.com/profiles/${player.steamId64}`,
-        ...statUpdate,
       },
     });
 

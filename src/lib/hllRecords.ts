@@ -58,13 +58,16 @@ let hllRecordsRunInProgress = false;
 
 async function runPythonScraper(args: string[]): Promise<string> {
   const scriptPath = path.join(process.cwd(), "scripts", "fetch_hll_stats.py");
+  // A profile can take roughly 10–15 seconds while HLLRecords loads. Scale the
+  // process deadline for direct bulk calls instead of killing Python midway.
+  const timeout = Math.max(120_000, 30_000 + args.length * 20_000);
   let rawOutput = "";
   let lastError = "";
 
   for (const pythonBin of PYTHON_CANDIDATES) {
     try {
       const { stdout, stderr } = await execFileAsync(pythonBin, [scriptPath, ...args], {
-        timeout: 120000,
+        timeout,
         windowsHide: true,
         maxBuffer: 4 * 1024 * 1024,
       });
@@ -72,8 +75,17 @@ async function runPythonScraper(args: string[]): Promise<string> {
       lastError = "";
       break;
     } catch (error) {
-      const execError = error as Error & { stdout?: string; stderr?: string; code?: string };
-      lastError = execError.stdout?.trim() || execError.stderr?.trim() || execError.message;
+      const execError = error as Error & {
+        stdout?: string;
+        stderr?: string;
+        code?: string;
+        killed?: boolean;
+        signal?: string;
+      };
+      lastError =
+        execError.killed || execError.signal === "SIGTERM"
+          ? `HLLRecords scrape timed out after ${Math.ceil(timeout / 1000)} seconds for ${args.length} profile(s).`
+          : execError.stdout?.trim() || execError.stderr?.trim() || execError.message;
 
       if (execError.code === "ENOENT") {
         continue;
@@ -168,6 +180,51 @@ export async function fetchHllRecordStatsBatch(
   }
 
   return results;
+}
+
+async function fetchAndStoreHllRecordsBatch(steamIds: string[]) {
+  let statsBySteamId: Map<string, HllRecordStatResult | Error>;
+
+  try {
+    // The Python scraper keeps one Chromium instance open for every ID in this
+    // call. Calling it once per player exhausts Railway's process allowance.
+    statsBySteamId = await fetchHllRecordStatsBatch(steamIds);
+  } catch (error) {
+    const scraperError = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
+    statsBySteamId = new Map(steamIds.map((steamId) => [steamId, scraperError]));
+  }
+
+  let updated = 0;
+  let failed = 0;
+
+  for (const steamId64 of steamIds) {
+    const fetchedAt = new Date();
+    const stats = statsBySteamId.get(steamId64);
+
+    if (stats && !(stats instanceof Error)) {
+      await prisma.spottedPlayer.update({
+        where: { steamId64 },
+        data: {
+          hllRecordsKpm180: stats.kpm180,
+          hllRecordsStatError: null,
+          hllRecordsStatFetchedAt: fetchedAt,
+        },
+      });
+      updated += 1;
+      continue;
+    }
+
+    await prisma.spottedPlayer.update({
+      where: { steamId64 },
+      data: {
+        hllRecordsStatError: stats instanceof Error ? stats.message : "No HLLRecords result returned for this player.",
+        hllRecordsStatFetchedAt: fetchedAt,
+      },
+    });
+    failed += 1;
+  }
+
+  return { updated, failed };
 }
 
 function getQueueWhere(mode: HllRecordsKpmMode) {
@@ -453,39 +510,7 @@ async function processHllRecordsBatchForSteamIds({
   let failed = 0;
 
   try {
-    for (const { steamId64 } of batch) {
-      const fetchedAt = new Date();
-      let stats: HllRecordStatResult | Error | undefined;
-
-      try {
-        stats = (await fetchHllRecordStatsBatch([steamId64])).get(steamId64);
-      } catch (error) {
-        stats = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
-      }
-
-      if (stats && !(stats instanceof Error)) {
-        await prisma.spottedPlayer.update({
-          where: { steamId64 },
-          data: {
-            hllRecordsKpm180: stats.kpm180,
-            hllRecordsStatError: null,
-            hllRecordsStatFetchedAt: fetchedAt,
-          },
-        });
-        updated += 1;
-        continue;
-      }
-
-      const message = stats instanceof Error ? stats.message : "No HLLRecords result returned for this player.";
-      await prisma.spottedPlayer.update({
-        where: { steamId64 },
-        data: {
-          hllRecordsStatError: message,
-          hllRecordsStatFetchedAt: fetchedAt,
-        },
-      });
-      failed += 1;
-    }
+    ({ updated, failed } = await fetchAndStoreHllRecordsBatch(batch.map((player) => player.steamId64)));
   } finally {
     const remainingQueue = await listQueuePlayersForSteamIds(uniqueSteamIds, mode, previewTake);
     await saveHllRecordsDebugState({
@@ -621,42 +646,7 @@ export async function enrichHllRecordsKpmForSteamIds(
       startedAt,
     });
 
-    let updated = 0;
-    let failed = 0;
-
-    for (const steamId64 of batchSteamIds) {
-      const fetchedAt = new Date();
-      let stats: HllRecordStatResult | Error | undefined;
-
-      try {
-        stats = (await fetchHllRecordStatsBatch([steamId64])).get(steamId64);
-      } catch (error) {
-        stats = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
-      }
-
-      if (stats && !(stats instanceof Error)) {
-        await prisma.spottedPlayer.update({
-          where: { steamId64 },
-          data: {
-            hllRecordsKpm180: stats.kpm180,
-            hllRecordsStatError: null,
-            hllRecordsStatFetchedAt: fetchedAt,
-          },
-        });
-        updated += 1;
-        continue;
-      }
-
-      const message = stats instanceof Error ? stats.message : "No HLLRecords result returned for this player.";
-      await prisma.spottedPlayer.update({
-        where: { steamId64 },
-        data: {
-          hllRecordsStatError: message,
-          hllRecordsStatFetchedAt: fetchedAt,
-        },
-      });
-      failed += 1;
-    }
+    const { updated, failed } = await fetchAndStoreHllRecordsBatch(batchSteamIds);
 
     const remainingQueue = await listQueuePlayersForSteamIds(uniqueSteamIds, selectedMode, previewTake);
     await saveHllRecordsDebugState({
@@ -709,42 +699,7 @@ export async function enrichHllRecordsKpm(limit = 25, mode: HllRecordsKpmMode = 
     startedAt,
   });
 
-  let updated = 0;
-  let failed = 0;
-
-  for (const steamId64 of steamIds) {
-    const fetchedAt = new Date();
-    let stats: HllRecordStatResult | Error | undefined;
-
-    try {
-      stats = (await fetchHllRecordStatsBatch([steamId64])).get(steamId64);
-    } catch (error) {
-      stats = error instanceof Error ? error : new Error("Failed to fetch HLLRecords profile stats.");
-    }
-
-    if (stats && !(stats instanceof Error)) {
-      await prisma.spottedPlayer.update({
-        where: { steamId64 },
-        data: {
-          hllRecordsKpm180: stats.kpm180,
-          hllRecordsStatError: null,
-          hllRecordsStatFetchedAt: fetchedAt,
-        },
-      });
-      updated += 1;
-      continue;
-    }
-
-    const message = stats instanceof Error ? stats.message : "No HLLRecords result returned for this player.";
-    await prisma.spottedPlayer.update({
-      where: { steamId64 },
-      data: {
-        hllRecordsStatError: message,
-        hllRecordsStatFetchedAt: fetchedAt,
-      },
-    });
-    failed += 1;
-  }
+  const { updated, failed } = await fetchAndStoreHllRecordsBatch(steamIds);
 
   const remainingQueue = await listQueuePlayers("pending", 20);
   await saveHllRecordsDebugState({
